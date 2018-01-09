@@ -190,6 +190,15 @@ public class Bridge extends PrecompiledContracts.PrecompiledContract {
 
     @Override
     public long getGasForData(byte[] data) {
+        // If being called from a contract pre the RFS-90 fork, this would throw a null pointer exception
+        // Mimic the same behavior
+        if (!blockchainConfig.isRfs90()) {
+            byte[] senderCode = repository.getCode(rskTx.getSender());
+            if (senderCode != null && senderCode.length > 0) {
+                throw new RuntimeException("Trying to estimate gas from contract pre RFS-90 fork");
+            }
+        }
+
         if (BridgeUtils.isFreeBridgeTx(config, rskTx, rskExecutionBlock.getNumber())) {
             return 0;
         }

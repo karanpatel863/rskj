@@ -91,7 +91,7 @@ public enum BridgeMethods {
                     new String[]{},
                     new String[]{"int"}
             ),
-            20000L,
+            19000L,
             (BridgeMethodExecutorTyped) Bridge::getBtcBlockchainInitialBlockHeight,
             (blockchainConfig -> blockchainConfig.isRfs55())
     ),
@@ -110,7 +110,7 @@ public enum BridgeMethods {
                     new String[]{"int256"},
                     new String[]{"bytes"}
             ),
-            20000L,
+            76000L,
             (BridgeMethodExecutorTyped) Bridge::getBtcBlockchainBlockHashAtDepth,
             (blockchainConfig -> blockchainConfig.isRfs55())
     ),
