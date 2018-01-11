@@ -29,6 +29,7 @@ import co.rsk.config.BridgeRegTestConstants;
 import co.rsk.config.TestSystemProperties;
 import co.rsk.core.BlockDifficulty;
 import co.rsk.core.RskAddress;
+import co.rsk.crypto.Keccak256;
 import co.rsk.db.RepositoryImpl;
 import co.rsk.net.messages.Message;
 import co.rsk.peg.bitcoin.SimpleBtcTransaction;
@@ -1561,7 +1562,7 @@ public class BridgeTest {
         byte[] callerCode = assembler.assemble("0xaabb 0xccdd 0xeeff");
         invoke.getRepository().saveCode(new RskAddress(invoke.getOwnerAddress().getLast20Bytes()), callerCode);
 
-        VM vm = new VM(config);
+        VM vm = new VM(config.getVmConfig(), new PrecompiledContracts(config));
             
         // Encode a call to the bridge's getMinimumLockTxValue function
         // That means first pushing the corresponding encoded ABI storage to memory (MSTORE)
@@ -1574,10 +1575,10 @@ public class BridgeTest {
 
         // Mock a transaction, all we really need is a hash
         Transaction tx = mock(Transaction.class);
-        when(tx.getHash()).thenReturn(HashUtil.sha3(Hex.decode("aabbccdd")));
+        when(tx.getHash()).thenReturn(new Keccak256(HashUtil.keccak256(Hex.decode("aabbccdd"))));
 
         // Run the program on the VM
-        Program program = new Program(config, code, invoke, tx);
+        Program program = new Program(config.getVmConfig(), new PrecompiledContracts(config), (BlockchainConfig) testConfig, code, invoke, tx);
         for (int i = 0; i < numOps; i++) {
             vm.step(program);
         }
