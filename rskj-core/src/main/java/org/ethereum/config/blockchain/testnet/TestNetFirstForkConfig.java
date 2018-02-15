@@ -26,4 +26,9 @@ public class TestNetFirstForkConfig extends TestNetAfterBridgeSyncConfig {
     public boolean isRfs90() {
         return true;
     }
+
+    @Override
+    public boolean isRfs94() {
+        return true;
+    }
 }
