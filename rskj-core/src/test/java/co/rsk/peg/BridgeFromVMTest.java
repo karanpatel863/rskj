@@ -20,7 +20,6 @@ package co.rsk.peg;
 
 import co.rsk.asm.EVMAssembler;
 import co.rsk.config.BridgeRegTestConstants;
-import co.rsk.config.RskSystemProperties;
 import co.rsk.config.TestSystemProperties;
 import co.rsk.core.RskAddress;
 import co.rsk.crypto.Keccak256;
@@ -45,7 +44,7 @@ import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.*;
 
 public class BridgeFromVMTest {
-    private static RskSystemProperties config = new TestSystemProperties();
+    private static TestSystemProperties config = new TestSystemProperties();
     private BlockchainNetConfig oldConfig;
     private BlockchainNetConfig testConfig;
 
@@ -82,7 +81,7 @@ public class BridgeFromVMTest {
                 .getContractForAddress(new DataWord(PrecompiledContracts.BRIDGE_ADDR_STR));
 
         VM vm = new VM(config.getVmConfig(), precompiledContracts);
-            
+
         // Encode a call to the bridge's getMinimumLockTxValue function
         // That means first pushing the corresponding encoded ABI storage to memory (MSTORE)
         // and then doing a CALL to the corresponding address with the correct parameters

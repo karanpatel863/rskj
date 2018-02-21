@@ -2989,6 +2989,7 @@ public class VMTest {
     private BlockchainConfig getBlockchainConfig() {
         BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
         when(blockchainConfig.isRcs230()).thenReturn(true);
+        when(blockchainConfig.isRfs90()).thenReturn(true);
         when(blockchainConfig.isRfs50()).thenReturn(true);
         when(blockchainConfig.isRfs55()).thenReturn(true);
         return blockchainConfig;
@@ -2997,7 +2998,6 @@ public class VMTest {
     private Program getProgram(byte[] code, Transaction transaction) {
         return new Program(vmConfig, precompiledContracts, getBlockchainConfig(), code, invoke, transaction);
     }
-
     private byte[] compile(String code) {
         return new BytecodeCompiler().compile(code);
     }
