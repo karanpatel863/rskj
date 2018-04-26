@@ -46,9 +46,8 @@ public class SelectionRule {
         return currentBlock.getHeader().getPaidFees().compareTo(blockFeesCriteria) < 0 &&
                 isThisBlockHashSmaller(block.getHash().getBytes(), currentBlock.getHash().getBytes());
     }
-    
-    public static boolean isBrokenSelectionRule(
-            BlockHeader processingBlockHeader, List<Sibling> siblings) {
+
+    public static boolean isBrokenSelectionRule(BlockHeader processingBlockHeader, List<Sibling> siblings) {
         int maxUncleCount = 0;
         for (Sibling sibling : siblings) {
             maxUncleCount = Math.max(maxUncleCount, sibling.getUncleCount());
