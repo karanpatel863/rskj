@@ -244,9 +244,6 @@ public class Start {
                 }
             }
         }
-        if(rsk != null) {
-            rsk.close();
-        }
         if(messageHandler != null) {
             messageHandler.stop();
         }
