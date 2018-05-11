@@ -97,9 +97,11 @@ public class Remasc {
             // 2) invocation to remasc from another contract (ie call opcode)
             throw new RemascInvalidInvocationException("Invoked Remasc outside last tx of the block");
         }
-        this.addNewSiblings();
-
         long blockNbr = executionBlock.getNumber();
+        if (!config.getBlockchainConfig().getConfigForBlock(blockNbr).isRskIp15Bis()) {
+            this.addNewSiblings();
+        }
+
         long processingBlockNumber = blockNbr - remascConstants.getMaturity();
         if (processingBlockNumber < 1 ) {
             logger.debug("First block has not reached maturity yet, current block is {}", blockNbr);
@@ -209,7 +211,10 @@ public class Remasc {
             feesPayer.payMiningFees(processingBlockHeader.getHash().getBytes(), fullBlockReward, processingBlockHeader.getCoinbase(), logs);
             provider.setBrokenSelectionRule(Boolean.FALSE);
         }
-        this.removeUsedSiblings(processingBlockHeader);
+
+        if (!config.getBlockchainConfig().getConfigForBlock(blockNbr).isRskIp15Bis()) {
+            this.removeUsedSiblings(processingBlockHeader);
+        }
     }
 
 
