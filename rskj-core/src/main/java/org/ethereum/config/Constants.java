@@ -22,6 +22,7 @@ package org.ethereum.config;
 import co.rsk.config.BridgeConstants;
 import co.rsk.config.BridgeTestNetConstants;
 import co.rsk.core.BlockDifficulty;
+import co.rsk.core.Coin;
 import co.rsk.core.RskAddress;
 import org.spongycastle.util.encoders.Hex;
 
@@ -76,6 +77,8 @@ public class Constants {
     public byte[] fallbackMiningPubKey0 = Hex.decode("041e2b148c024770e19c4f31db2233cac791583df95b4d14a5e9fd4b38dc8254b3048f937f169446b19d2eca40db1dd93fab34c0cd8a310afd6e6211f9a89e4bca");
 
     public byte[] fallbackMiningPubKey1 = Hex.decode("04b55031870df5de88bdb84f65bd1c6f8331c633e759caa5ac7cad3fa4f8a36791e995804bba1558ddcf330a67ff5bfa253fa1d8789735f97a97e849686527976e");
+
+    private Coin minimumPayableGas = new Coin(BigInteger.valueOf(75000));
 
     public static BigInteger getTransactionGasCap() {
         return TRANSACTION_GAS_CAP;
@@ -162,4 +165,8 @@ public class Constants {
      * EIP155: https://github.com/ethereum/EIPs/issues/155
      */
     public byte getChainId() { return Constants.CHAIN_ID; }
+
+    public Coin getMinimumPayableGas() {
+        return minimumPayableGas;
+    }
 }
