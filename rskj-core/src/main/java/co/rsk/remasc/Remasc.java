@@ -113,7 +113,7 @@ public class Remasc {
         }
 
         int uncleGenerationLimit = config.getBlockchainConfig().getCommonConstants().getUncleGenerationLimit();
-        List<Block> descendantsBlocks = new ArrayList<>();
+        List<Block> descendantsBlocks = new ArrayList<>(uncleGenerationLimit);
 
         // this search can be optimized if have certainty that the execution block is not in a fork
         // larger than depth
@@ -123,7 +123,7 @@ public class Remasc {
         );
         descendantsBlocks.add(currentBlock);
 
-        for (int i = 0; i < uncleGenerationLimit - 1 ; i++) {
+        for (int i = 0; i < uncleGenerationLimit - 1; i++) {
             currentBlock = blockStore.getBlockByHash(currentBlock.getParentHash().getBytes());
             descendantsBlocks.add(currentBlock);
         }
