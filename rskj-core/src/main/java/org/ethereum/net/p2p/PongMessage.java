@@ -19,7 +19,9 @@
 
 package org.ethereum.net.p2p;
 
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
+
+import java.util.Arrays;
 
 /**
  * Wrapper around an Ethereum Pong message on the network
@@ -35,7 +37,7 @@ public class PongMessage extends P2pMessage {
 
     @Override
     public byte[] getEncoded() {
-        return FIXED_PAYLOAD;
+        return Arrays.copyOf(FIXED_PAYLOAD, FIXED_PAYLOAD.length);
     }
 
     @Override

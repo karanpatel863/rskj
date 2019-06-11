@@ -19,7 +19,9 @@
 
 package org.ethereum.net.p2p;
 
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
+
+import java.util.Arrays;
 
 /**
  * Wrapper around an Ethereum Ping message on the network
@@ -34,7 +36,7 @@ public class PingMessage extends P2pMessage {
     private static final byte[] FIXED_PAYLOAD = Hex.decode("C0");
 
     public byte[] getEncoded() {
-        return FIXED_PAYLOAD;
+        return Arrays.copyOf(FIXED_PAYLOAD, FIXED_PAYLOAD.length);
     }
 
     @Override

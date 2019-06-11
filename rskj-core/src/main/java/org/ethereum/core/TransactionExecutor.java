@@ -19,38 +19,35 @@
 
 package org.ethereum.core;
 
-import co.rsk.config.RskSystemProperties;
 import co.rsk.config.VmConfig;
 import co.rsk.core.Coin;
 import co.rsk.core.RskAddress;
+import co.rsk.metrics.profilers.Metric;
+import co.rsk.metrics.profilers.Profiler;
+import co.rsk.metrics.profilers.ProfilerFactory;
 import co.rsk.panic.PanicProcessor;
-import org.ethereum.config.BlockchainConfig;
 import org.ethereum.config.Constants;
+import org.ethereum.config.blockchain.upgrades.ActivationConfig;
 import org.ethereum.db.BlockStore;
-import org.ethereum.db.ContractDetails;
 import org.ethereum.db.ReceiptStore;
-import org.ethereum.listener.EthereumListener;
-import org.ethereum.listener.EthereumListenerAdapter;
 import org.ethereum.vm.*;
 import org.ethereum.vm.program.Program;
 import org.ethereum.vm.program.ProgramResult;
 import org.ethereum.vm.program.invoke.ProgramInvoke;
 import org.ethereum.vm.program.invoke.ProgramInvokeFactory;
 import org.ethereum.vm.trace.ProgramTrace;
+import org.ethereum.vm.trace.ProgramTraceProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.math.BigInteger;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 import static org.apache.commons.lang3.ArrayUtils.getLength;
 import static org.apache.commons.lang3.ArrayUtils.isEmpty;
 import static org.ethereum.util.BIUtil.*;
 import static org.ethereum.util.ByteUtil.EMPTY_BYTE_ARRAY;
-import static org.ethereum.vm.VMUtils.saveProgramTraceFile;
 
 /**
  * @author Roman Mandeleil
@@ -59,17 +56,22 @@ import static org.ethereum.vm.VMUtils.saveProgramTraceFile;
 public class TransactionExecutor {
 
     private static final Logger logger = LoggerFactory.getLogger("execute");
+    private static final Profiler profiler = ProfilerFactory.getInstance();
     private static final PanicProcessor panicProcessor = new PanicProcessor();
 
-    private final RskSystemProperties config;
+    private final Constants constants;
+    private final ActivationConfig.ForBlock activations;
     private final Transaction tx;
     private final int txindex;
     private final Repository track;
     private final Repository cacheTrack;
     private final BlockStore blockStore;
     private final ReceiptStore receiptStore;
+    private final BlockFactory blockFactory;
     private final VmConfig vmConfig;
     private final PrecompiledContracts precompiledContracts;
+    private final boolean playVm;
+    private final boolean enableRemasc;
     private String executionError = "";
     private final long gasUsedInTheBlock;
     private Coin paidFees;
@@ -82,8 +84,6 @@ public class TransactionExecutor {
     private ProgramResult result = new ProgramResult();
     private final Block executionBlock;
 
-    private final EthereumListener listener;
-
     private VM vm;
     private Program program;
 
@@ -92,18 +92,17 @@ public class TransactionExecutor {
     private BigInteger mEndGas = BigInteger.ZERO;
     private long basicTxCost = 0;
     private List<LogInfo> logs = null;
+    private final Set<DataWord> deletedAccounts;
 
     private boolean localCall = false;
 
-    public TransactionExecutor(RskSystemProperties config, Transaction tx, int txindex, RskAddress coinbase, Repository track, BlockStore blockStore, ReceiptStore receiptStore,
-                               ProgramInvokeFactory programInvokeFactory, Block executionBlock) {
-        this(config, tx, txindex, coinbase, track, blockStore, receiptStore, programInvokeFactory, executionBlock, new EthereumListenerAdapter(), 0);
-    }
-
-    public TransactionExecutor(RskSystemProperties config, Transaction tx, int txindex, RskAddress coinbase, Repository track, BlockStore blockStore, ReceiptStore receiptStore,
-                               ProgramInvokeFactory programInvokeFactory, Block executionBlock,
-                               EthereumListener listener, long gasUsedInTheBlock) {
-        this.config = config;
+    public TransactionExecutor(
+            Constants constants, ActivationConfig activationConfig, Transaction tx, int txindex, RskAddress coinbase,
+            Repository track, BlockStore blockStore, ReceiptStore receiptStore, BlockFactory blockFactory,
+            ProgramInvokeFactory programInvokeFactory, Block executionBlock, long gasUsedInTheBlock, VmConfig vmConfig,
+            boolean playVm, boolean remascEnabled, PrecompiledContracts precompiledContracts, Set<DataWord> deletedAccounts) {
+        this.constants = constants;
+        this.activations = activationConfig.forBlock(executionBlock.getNumber());
         this.tx = tx;
         this.txindex = txindex;
         this.coinbase = coinbase;
@@ -111,14 +110,16 @@ public class TransactionExecutor {
         this.cacheTrack = track.startTracking();
         this.blockStore = blockStore;
         this.receiptStore = receiptStore;
+        this.blockFactory = blockFactory;
         this.programInvokeFactory = programInvokeFactory;
         this.executionBlock = executionBlock;
-        this.listener = listener;
         this.gasUsedInTheBlock = gasUsedInTheBlock;
-        this.vmConfig = config.getVmConfig();
-        this.precompiledContracts = new PrecompiledContracts(config);
+        this.vmConfig = vmConfig;
+        this.precompiledContracts = precompiledContracts;
+        this.playVm = playVm;
+        this.enableRemasc = remascEnabled;
+        this.deletedAccounts = new HashSet<>(deletedAccounts);
     }
-
 
     /**
      * Do all the basic validation, if the executor
@@ -126,7 +127,7 @@ public class TransactionExecutor {
      * set readyToExecute = true
      */
     public boolean init() {
-        basicTxCost = tx.transactionCost(config, executionBlock);
+        basicTxCost = tx.transactionCost(constants, activations);
 
         if (localCall) {
             readyToExecute = true;
@@ -195,7 +196,7 @@ public class TransactionExecutor {
             return false;
         }
 
-        if (!tx.acceptTransactionSignature(config.getBlockchainConfig().getCommonConstants().getChainId())) {
+        if (!tx.acceptTransactionSignature(constants.getChainId())) {
             logger.warn("Transaction {} signature not accepted: {}", tx.getHash(), tx.getSignature());
             logger.warn("Transaction Data: {}", tx);
             logger.warn("Tx Included in the following block: {}", this.executionBlock);
@@ -251,10 +252,14 @@ public class TransactionExecutor {
         // java.lang.RuntimeException: Data word can't exceed 32 bytes:
         // if targetAddress size is greater than 32 bytes.
         // But init() will detect this earlier
-        precompiledContract = precompiledContracts.getContractForAddress(new DataWord(targetAddress.getBytes()));
+        precompiledContract = precompiledContracts.getContractForAddress(activations, DataWord.valueOf(targetAddress.getBytes()));
 
         if (precompiledContract != null) {
+            Metric metric = profiler.start(Profiler.PROFILING_TYPE.PRECOMPILED_CONTRACT_INIT);
             precompiledContract.init(tx, executionBlock, track, blockStore, receiptStore, result.getLogInfoList());
+            profiler.stop(metric);
+
+            metric = profiler.start(Profiler.PROFILING_TYPE.PRECOMPILED_CONTRACT_EXECUTE);
             long requiredGas = precompiledContract.getGasForData(tx.getData());
             BigInteger txGasLimit = toBI(tx.getGasLimit());
 
@@ -264,6 +269,7 @@ public class TransactionExecutor {
                 execError(String.format("Out of Gas calling precompiled contract 0x%s, required: %d, left: %s ",
                         targetAddress.toString(), (requiredGas + basicTxCost), mEndGas));
                 mEndGas = BigInteger.ZERO;
+                profiler.stop(metric);
                 return;
             } else {
                 long gasUsed = requiredGas + basicTxCost;
@@ -273,14 +279,22 @@ public class TransactionExecutor {
                 try {
                     byte[] out = precompiledContract.execute(tx.getData());
                     result.setHReturn(out);
+                    if (!track.isExist(targetAddress)) {
+                        track.createAccount(targetAddress);
+                        track.setupContract(targetAddress);
+                    } else if (!track.isContract(targetAddress)) {
+                        track.setupContract(targetAddress);
+                    }
                 } catch (RuntimeException e) {
                     result.setException(e);
                 }
 
                 result.spendGas(gasUsed);
+                profiler.stop(metric);
             }
         } else {
             byte[] code = track.getCode(targetAddress);
+            // Code can be null
             if (isEmpty(code)) {
                 mEndGas = toBI(tx.getGasLimit()).subtract(BigInteger.valueOf(basicTxCost));
                 result.spendGas(basicTxCost);
@@ -289,8 +303,7 @@ public class TransactionExecutor {
                         programInvokeFactory.createProgramInvoke(tx, txindex, executionBlock, cacheTrack, blockStore);
 
                 this.vm = new VM(vmConfig, precompiledContracts);
-                BlockchainConfig configForBlock = config.getBlockchainConfig().getConfigForBlock(executionBlock.getNumber());
-                this.program = new Program(vmConfig, precompiledContracts, configForBlock, code, programInvoke, tx);
+                this.program = new Program(vmConfig, precompiledContracts, blockFactory, activations, code, programInvoke, tx, deletedAccounts);
             }
         }
 
@@ -302,22 +315,27 @@ public class TransactionExecutor {
 
     private void create() {
         RskAddress newContractAddress = tx.getContractAddress();
+        cacheTrack.createAccount(newContractAddress); // pre-created
+
         if (isEmpty(tx.getData())) {
             mEndGas = toBI(tx.getGasLimit()).subtract(BigInteger.valueOf(basicTxCost));
-            cacheTrack.createAccount(newContractAddress);
+            // If there is no data, then the account is created, but without code nor
+            // storage. It doesn't even call setupContract() to setup a storage root
         } else {
+            cacheTrack.setupContract(newContractAddress);
             ProgramInvoke programInvoke = programInvokeFactory.createProgramInvoke(tx, txindex, executionBlock, cacheTrack, blockStore);
 
             this.vm = new VM(vmConfig, precompiledContracts);
-            BlockchainConfig configForBlock = config.getBlockchainConfig().getConfigForBlock(executionBlock.getNumber());
-            this.program = new Program(vmConfig, precompiledContracts, configForBlock, tx.getData(), programInvoke, tx);
+            this.program = new Program(vmConfig, precompiledContracts, blockFactory, activations, tx.getData(), programInvoke, tx, deletedAccounts);
 
             // reset storage if the contract with the same address already exists
             // TCK test case only - normally this is near-impossible situation in the real network
+            /* Storage keys not available anymore in a fast way
             ContractDetails contractDetails = program.getStorage().getContractDetails(newContractAddress);
             for (DataWord key : contractDetails.getStorageKeys()) {
                 program.storageSave(key, DataWord.ZERO);
             }
+            */
         }
 
         Coin endowment = tx.getValue();
@@ -347,12 +365,15 @@ public class TransactionExecutor {
 
         logger.trace("Go transaction {} {}", toBI(tx.getNonce()), tx.getHash());
 
+        //Set the deleted accounts in the block in the remote case there is a CREATE2 creating a deleted account
+
+        Metric metric = profiler.start(Profiler.PROFILING_TYPE.VM_EXECUTE);
         try {
 
             // Charge basic cost of the transaction
-            program.spendGas(tx.transactionCost(config, executionBlock), "TRANSACTION COST");
+            program.spendGas(tx.transactionCost(constants, activations), "TRANSACTION COST");
 
-            if (config.playVM()) {
+            if (playVm) {
                 vm.play(program);
             }
 
@@ -398,13 +419,16 @@ public class TransactionExecutor {
             }
 
         } catch (Throwable e) {
-
+            // NOTE: we really should about the node, shutdown everything, and fail safe.
             // TODO: catch whatever they will throw on you !!!
 //            https://github.com/ethereum/cpp-ethereum/blob/develop/libethereum/Executive.cpp#L241
             cacheTrack.rollback();
             mEndGas = BigInteger.ZERO;
             execError(e);
 
+        }
+        finally {
+            profiler.stop(metric);
         }
     }
 
@@ -449,7 +473,6 @@ public class TransactionExecutor {
         // Accumulate refunds for suicides
         result.addFutureRefund((long)result.getDeleteAccounts().size() * GasCost.SUICIDE_REFUND);
         long gasRefund = Math.min(result.getFutureRefund(), result.getGasUsed() / 2);
-        RskAddress addr = tx.isContractCreation() ? tx.getContractAddress() : tx.getReceiveAddress();
         mEndGas = mEndGas.add(BigInteger.valueOf(gasRefund));
 
         summaryBuilder
@@ -457,12 +480,6 @@ public class TransactionExecutor {
                 .gasRefund(toBI(gasRefund))
                 .deletedAccounts(result.getDeleteAccounts())
                 .internalTransactions(result.getInternalTransactions());
-
-        ContractDetails cdetails = track.getContractDetails(addr);
-
-        if (cdetails != null) {
-            summaryBuilder.storageDiff(cdetails.getStorage());
-        }
 
         if (result.getException() != null) {
             summaryBuilder.markAsFailed();
@@ -480,7 +497,7 @@ public class TransactionExecutor {
         Coin summaryFee = summary.getFee();
 
         //TODO: REMOVE THIS WHEN THE LocalBLockTests starts working with REMASC
-        if(config.isRemascEnabled()) {
+        if(enableRemasc) {
             logger.trace("Adding fee to remasc contract account");
             track.addBalance(PrecompiledContracts.REMASC_ADDR, summaryFee);
         } else {
@@ -496,32 +513,25 @@ public class TransactionExecutor {
         // Traverse list of suicides
         result.getDeleteAccounts().forEach(address -> track.delete(new RskAddress(address)));
 
-        if (listener != null) {
-            listener.onTransactionExecuted(summary);
-        }
-
         logger.trace("tx listener done");
-
-        if (config.vmTrace() && program != null) {
-            ProgramTrace trace = program.getTrace().result(result.getHReturn()).error(result.getException());
-            String txHash = tx.getHash().toHexString();
-            try {
-                saveProgramTraceFile(config, txHash, trace);
-                if (listener != null) {
-                    listener.onVMTraceCreated(txHash, trace);
-                }
-            } catch (IOException e) {
-                String errorMessage = String.format("Cannot write trace to file: %s", e.getMessage());
-                panicProcessor.panic("executor", errorMessage);
-                logger.error(errorMessage);
-            }
-        }
 
         logger.trace("tx finalization done");
     }
 
+    /**
+     * This extracts the trace to an object in memory.
+     * Refer to {@link org.ethereum.vm.VMUtils#saveProgramTraceFile} for a way to saving the trace to a file.
+     */
+    public void extractTrace(ProgramTraceProcessor programTraceProcessor) {
+        if (program != null) {
+            ProgramTrace trace = program.getTrace().result(result.getHReturn()).error(result.getException());
+            programTraceProcessor.processProgramTrace(trace, tx.getHash());
+        }
+    }
+
     public TransactionExecutor setLocalCall(boolean localCall) {
         this.localCall = localCall;
+        this.tx.setLocalCallTransaction(localCall);
         return this;
     }
 

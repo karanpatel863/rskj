@@ -18,16 +18,13 @@
 
 package co.rsk.net.discovery;
 
-//import co.rsk.net.discovery.message.GetNodeMessage;
-//import co.rsk.net.discovery.message.SendNodesMessage;
 import co.rsk.net.discovery.message.*;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import org.ethereum.crypto.ECKey;
 import org.junit.Assert;
 import org.junit.Test;
 import org.mockito.Mockito;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -38,6 +35,7 @@ import java.util.UUID;
  */
 public class PacketDecoderTest {
 
+    private static final int NETWORK_ID = 1;
     private static final String KEY_1 = "bd1d20e480dfb1c9c07ba0bc8cf9052f89923d38b5128c5dbfc18d4eea38261f";
 
     @Test
@@ -50,43 +48,30 @@ public class PacketDecoderTest {
         PacketDecoder decoder = new PacketDecoder();
 
         //Decode Ping Message
-        PingPeerMessage nodeMessage = PingPeerMessage.create("localhost", 44035, check, key1);
+        PingPeerMessage nodeMessage = PingPeerMessage.create("localhost", 44035, check, key1, NETWORK_ID);
         InetSocketAddress sender = new InetSocketAddress("localhost", 44035);
         this.assertDecodedMessage(decoder.decodeMessage(ctx, nodeMessage.getPacket(), sender), sender, DiscoveryMessageType.PING);
 
         //Decode Pong Message
-        PongPeerMessage pongPeerMessage = PongPeerMessage.create("localhost", 44036, check, key1);
+        PongPeerMessage pongPeerMessage = PongPeerMessage.create("localhost", 44036, check, key1, NETWORK_ID);
         sender = new InetSocketAddress("localhost", 44036);
         this.assertDecodedMessage(decoder.decodeMessage(ctx, pongPeerMessage.getPacket(), sender), sender, DiscoveryMessageType.PONG);
 
         //Decode Find Node Message
-        FindNodePeerMessage findNodePeerMessage = FindNodePeerMessage.create(key1.getNodeId(), check, key1);
+        FindNodePeerMessage findNodePeerMessage = FindNodePeerMessage.create(key1.getNodeId(), check, key1, NETWORK_ID);
         sender = new InetSocketAddress("localhost", 44037);
         this.assertDecodedMessage(decoder.decodeMessage(ctx, findNodePeerMessage.getPacket(), sender), sender, DiscoveryMessageType.FIND_NODE);
 
         //Decode Neighbors Message
-        NeighborsPeerMessage neighborsPeerMessage = NeighborsPeerMessage.create(new ArrayList<>(), check, key1);
+        NeighborsPeerMessage neighborsPeerMessage = NeighborsPeerMessage.create(new ArrayList<>(), check, key1, NETWORK_ID);
         sender = new InetSocketAddress("localhost", 44038);
         this.assertDecodedMessage(decoder.decodeMessage(ctx, neighborsPeerMessage.getPacket(), sender), sender, DiscoveryMessageType.NEIGHBORS);
 
     }
 
-    @Test(expected = PeerDiscoveryException.class)
-    public void decodeInvalidMessage() throws Exception {
-
-        PacketDecoder decoder = new PacketDecoder();
-        ChannelHandlerContext ctx = Mockito.mock(ChannelHandlerContext.class);
-        InetSocketAddress sender = new InetSocketAddress("localhost", 44035);
-        Channel channel = Mockito.mock(Channel.class);
-        Mockito.when(ctx.channel()).thenReturn(channel);
-        Mockito.when(channel.remoteAddress()).thenReturn(sender);
-
-        decoder.decodeMessage(ctx, new byte[] {11}, sender);
-
-        Assert.fail();
-    }
-
-    private void assertDecodedMessage(DiscoveryEvent event, InetSocketAddress sender, DiscoveryMessageType messageType) {
+    private void assertDecodedMessage(DiscoveryEvent event,
+                                      InetSocketAddress sender,
+                                      DiscoveryMessageType messageType) {
         Assert.assertEquals(messageType, event.getMessage().getMessageType());
         Assert.assertEquals(sender, event.getAddress());
         Assert.assertNotNull(event.getMessage().getPacket());

@@ -35,6 +35,7 @@ import java.math.BigInteger;
 public class CallContractTest {
 
     private static final TestSystemProperties config = new TestSystemProperties();
+    private static final BlockFactory blockFactory = new BlockFactory(config.getActivationConfig());
 
     @Test
     public void callContractReturningOne() {
@@ -54,8 +55,8 @@ public class CallContractTest {
     }
 
     private static ProgramResult callContract(World world, RskAddress receiveAddress, byte[] data) {
-        Transaction tx = CallTransaction.createRawTransaction(config, 0, 0, 100000000000000L,
-                receiveAddress, 0, data);
+        Transaction tx = CallTransaction.createRawTransaction(0, 0, 100000000000000L,
+                receiveAddress, 0, data, config.getNetworkConstants().getChainId());
         tx.sign(new byte[32]);
 
         Block bestBlock = world.getBlockChain().getBestBlock();
@@ -63,9 +64,15 @@ public class CallContractTest {
         Repository repository = world.getRepository().startTracking();
 
         try {
-            org.ethereum.core.TransactionExecutor executor = new org.ethereum.core.TransactionExecutor
-                    (config, tx, 0, bestBlock.getCoinbase(), repository, null, null,
-                            new ProgramInvokeFactoryImpl(), bestBlock)
+            TransactionExecutorFactory transactionExecutorFactory = new TransactionExecutorFactory(
+                    config,
+                    null,
+                    null,
+                    blockFactory,
+                    new ProgramInvokeFactoryImpl()
+            );
+            org.ethereum.core.TransactionExecutor executor = transactionExecutorFactory
+                    .newInstance(tx, 0, bestBlock.getCoinbase(), repository, bestBlock, 0)
                     .setLocalCall(true);
 
             executor.init();

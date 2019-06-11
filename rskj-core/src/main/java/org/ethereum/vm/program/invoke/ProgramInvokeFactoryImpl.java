@@ -30,8 +30,7 @@ import org.ethereum.vm.DataWord;
 import org.ethereum.vm.program.Program;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongycastle.util.encoders.Hex;
-import org.springframework.stereotype.Component;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.math.BigInteger;
 
@@ -41,7 +40,6 @@ import static org.apache.commons.lang3.ArrayUtils.nullToEmpty;
  * @author Roman Mandeleil
  * @since 08.06.2014
  */
-@Component("ProgramInvokeFactory")
 public class ProgramInvokeFactoryImpl implements ProgramInvokeFactory {
 
     private static final Logger logger = LoggerFactory.getLogger("VM");
@@ -146,13 +144,14 @@ public class ProgramInvokeFactoryImpl implements ProgramInvokeFactory {
                                              DataWord inValue,
                                              long inGas,
                                              Coin balanceInt, byte[] dataIn,
-                                             Repository repository, BlockStore blockStore, boolean byTestingSuite) {
+                                             Repository repository, BlockStore blockStore,
+                                             boolean isStaticCall, boolean byTestingSuite) {
 
         DataWord address = toAddress;
         DataWord origin = program.getOriginAddress();
         DataWord caller = callerAddress;
 
-        DataWord balance = new DataWord(balanceInt.getBytes());
+        DataWord balance = DataWord.valueOf(balanceInt.getBytes());
         DataWord gasPrice = program.getGasPrice();
         long agas = inGas;
         DataWord callValue = inValue;
@@ -202,6 +201,7 @@ public class ProgramInvokeFactoryImpl implements ProgramInvokeFactory {
 
         return new ProgramInvokeImpl(address, origin, caller, balance, gasPrice, agas, callValue,
                 data, lastHash, coinbase, timestamp, number, transactionIndex, difficulty, gasLimit,
-                repository, program.getCallDeep() + 1, blockStore, byTestingSuite);
+                repository, program.getCallDeep() + 1, blockStore,
+                isStaticCall, byTestingSuite);
     }
 }

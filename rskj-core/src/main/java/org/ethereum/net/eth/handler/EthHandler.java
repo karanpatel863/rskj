@@ -57,8 +57,6 @@ public abstract class EthHandler extends SimpleChannelInboundHandler<EthMessage>
 
     protected EthVersion version;
 
-    protected boolean peerDiscoveryMode = false;
-
     protected Block bestBlock;
     protected EthereumListener listener = new EthereumListenerAdapter() {
         @Override
@@ -83,7 +81,7 @@ public abstract class EthHandler extends SimpleChannelInboundHandler<EthMessage>
 
     @Override
     public void channelRead0(final ChannelHandlerContext ctx, EthMessage msg) throws InterruptedException {
-        logger.debug("Read message: " + msg.toString());
+        logger.debug("Read message: {}", msg);
 
         if (EthMessageCodes.inRange(msg.getCommand().asByte(), version)) {
             logger.trace("EthHandler invoke: [{}]", msg.getCommand());
@@ -122,7 +120,7 @@ public abstract class EthHandler extends SimpleChannelInboundHandler<EthMessage>
 
     @Override
     public void sendMessage(EthMessage message) {
-        logger.debug("Send message: " + message.toString());
+        logger.debug("Send message: {}", message);
 
         msgQueue.sendMessage(message);
         channel.getNodeStatistics().ethOutbound.add();
@@ -134,10 +132,6 @@ public abstract class EthHandler extends SimpleChannelInboundHandler<EthMessage>
 
     public void setMsgQueue(MessageQueue msgQueue) {
         this.msgQueue = msgQueue;
-    }
-
-    public void setPeerDiscoveryMode(boolean peerDiscoveryMode) {
-        this.peerDiscoveryMode = peerDiscoveryMode;
     }
 
     public void setChannel(Channel channel) {

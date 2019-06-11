@@ -33,9 +33,7 @@ import co.rsk.scoring.PeerScoringManager;
 import co.rsk.scoring.PunishmentParameters;
 import co.rsk.test.World;
 import co.rsk.test.builders.BlockChainBuilder;
-import co.rsk.validators.DummyBlockValidationRule;
-import co.rsk.validators.ProofOfWorkRule;
-import org.ethereum.config.blockchain.RegTestConfig;
+import co.rsk.validators.*;
 import org.ethereum.core.*;
 import org.ethereum.crypto.HashUtil;
 import org.ethereum.net.server.Channel;
@@ -43,7 +41,6 @@ import org.ethereum.net.server.ChannelManager;
 import org.ethereum.rpc.Simples.SimpleChannelManager;
 import org.ethereum.util.RskMockFactory;
 import org.junit.Assert;
-import org.junit.BeforeClass;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.mockito.Mockito;
@@ -62,13 +59,9 @@ import static org.mockito.Mockito.*;
  * Created by ajlopez on 5/10/2016.
  */
 public class NodeMessageHandlerTest {
-    private static TestSystemProperties config;
 
-    @BeforeClass
-    public static void setUpBeforeClass() throws Exception {
-        config = new TestSystemProperties();
-        config.setBlockchainConfig(new RegTestConfig());
-    }
+    private final TestSystemProperties config = new TestSystemProperties();
+    private final BlockFactory blockFactory = new BlockFactory(config.getActivationConfig());
 
     @Test
     public void processBlockMessageUsingProcessor() throws UnknownHostException {
@@ -301,7 +294,7 @@ public class NodeMessageHandlerTest {
         when(channelManager.getActivePeers()).thenReturn(Collections.singletonList(channel));
         final Message[] msg = new Message[1];
         when(channelManager.sendMessageTo(eq(sender.getPeerNodeID()), any())).then((InvocationOnMock invocation) -> {
-            msg[0] = invocation.getArgumentAt(1, Message.class);
+            msg[0] = invocation.getArgument(1);
             return true;
         });
         final NodeMessageHandler handler = NodeMessageHandlerUtil.createHandlerWithSyncProcessor(SyncConfiguration.IMMEDIATE_FOR_TESTING, channelManager);
@@ -327,7 +320,9 @@ public class NodeMessageHandlerTest {
         BlockSyncService blockSyncService = new BlockSyncService(config, store, blockchain, nodeInformation, syncConfiguration);
         final NodeBlockProcessor bp = new NodeBlockProcessor(store, blockchain, nodeInformation, blockSyncService, syncConfiguration);
         final SimpleMessageChannel sender = new SimpleMessageChannel();
-        final SyncProcessor syncProcessor = new SyncProcessor(config, blockchain, blockSyncService, RskMockFactory.getPeerScoringManager(), RskMockFactory.getChannelManager(), syncConfiguration, new DummyBlockValidationRule(), null);
+        final SyncProcessor syncProcessor = new SyncProcessor(blockchain, blockSyncService, RskMockFactory.getPeerScoringManager(), RskMockFactory.getChannelManager(), syncConfiguration, blockFactory, new DummyBlockValidationRule(),
+                                                              new BlockCompositeRule(new BlockUnclesHashValidationRule(), new BlockRootValidationRule(config.getActivationConfig())),
+                                                              null);
         final NodeMessageHandler handler = new NodeMessageHandler(config, bp, syncProcessor, null, null, null,
                 new ProofOfWorkRule(config).setFallbackMiningEnabled(false));
 
@@ -736,21 +731,6 @@ public class NodeMessageHandlerTest {
                 continue;
             }
             Assert.assertEquals(1, sender.getMessages().size());
-
-            final Message message = sender.getMessages().get(0);
-            Assert.assertEquals(MessageType.BLOCK_HEADERS_MESSAGE, message.getMessageType());
-
-            final List<BlockHeader> headers = ((BlockHeadersMessage) message).getBlockHeaders();
-            equalBlockHeaders(testCase.expected, headers);
-        }
-    }
-
-    private void equalBlockHeaders(@Nonnull final List<BlockHeader> expected, @Nonnull final List<BlockHeader> received) {
-        Assert.assertEquals(expected.size(), received.size());
-        for (int i = 0; i < received.size(); i += 1) {
-            Assert.assertEquals(expected.get(i).getNumber(), received.get(i).getNumber());
-            Assert.assertEquals(expected.get(i).getHash(), received.get(i).getHash());
-            Assert.assertEquals(expected.get(i).getParentHash(), received.get(i).getParentHash());
         }
     }
 
@@ -886,23 +866,6 @@ public class NodeMessageHandlerTest {
         // besides this
         Assert.assertEquals(1, pscoring.getTotalEventCounter());
         Assert.assertEquals(1, pscoring.getEventCounter(EventType.VALID_TRANSACTION));
-    }
-
-    @Test
-    public void processTransactionsMessageDoesNothingBecauseNodeIsSyncing() {
-        ChannelManager channelManager = mock(ChannelManager.class);
-        BlockProcessor blockProcessor = mock(BlockProcessor.class);
-        Mockito.when(blockProcessor.hasBetterBlockToSync()).thenReturn(true);
-
-        final NodeMessageHandler handler = new NodeMessageHandler(config, blockProcessor, null, channelManager, null, null,
-                new ProofOfWorkRule(config).setFallbackMiningEnabled(false));
-
-        Message message = mock(Message.class);
-        Mockito.when(message.getMessageType()).thenReturn(MessageType.TRANSACTIONS);
-
-        handler.processMessage(null, message);
-
-        verify(channelManager, never()).broadcastTransactionMessage(any(), any());
     }
 
     @Test

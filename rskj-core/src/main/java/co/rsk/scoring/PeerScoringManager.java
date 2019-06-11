@@ -2,7 +2,7 @@ package co.rsk.scoring;
 
 import co.rsk.net.NodeID;
 import com.google.common.annotations.VisibleForTesting;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import javax.annotation.concurrent.GuardedBy;
 import java.net.InetAddress;
@@ -29,7 +29,7 @@ public class PeerScoringManager {
     private final InetAddressTable addressTable = new InetAddressTable();
 
     @GuardedBy("accessLock")
-    private final LinkedHashMap<NodeID, PeerScoring> peersByNodeID;
+    private final Map<NodeID, PeerScoring> peersByNodeID;
 
     @GuardedBy("accessLock")
     private final Map<InetAddress, PeerScoring> peersByAddress;

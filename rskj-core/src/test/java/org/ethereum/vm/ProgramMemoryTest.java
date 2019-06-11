@@ -20,13 +20,16 @@
 package org.ethereum.vm;
 
 import co.rsk.config.TestSystemProperties;
-import org.ethereum.config.BlockchainConfig;
+import org.ethereum.config.blockchain.upgrades.ActivationConfig;
+import org.ethereum.core.BlockFactory;
 import org.ethereum.util.ByteUtil;
 import org.ethereum.vm.program.Program;
 import org.ethereum.vm.program.invoke.ProgramInvokeMockImpl;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
+
+import java.util.HashSet;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
@@ -40,7 +43,7 @@ public class ProgramMemoryTest {
     @Before
     public void createProgram() {
         TestSystemProperties config = new TestSystemProperties();
-        program = new Program(config.getVmConfig(), new PrecompiledContracts(config), mock(BlockchainConfig.class), ByteUtil.EMPTY_BYTE_ARRAY, pi, null);
+        program = new Program(config.getVmConfig(), new PrecompiledContracts(config), new BlockFactory(config.getActivationConfig()), mock(ActivationConfig.ForBlock.class), ByteUtil.EMPTY_BYTE_ARRAY, pi, null, new HashSet<>());
     }
 
     @Test

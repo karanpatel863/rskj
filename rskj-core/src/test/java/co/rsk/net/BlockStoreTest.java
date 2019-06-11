@@ -19,10 +19,11 @@
 package co.rsk.net;
 
 import co.rsk.blockchain.utils.BlockGenerator;
-import co.rsk.core.RskAddress;
 import com.google.common.collect.Lists;
 import org.ethereum.TestUtils;
+import org.ethereum.config.blockchain.upgrades.ActivationConfigsForTest;
 import org.ethereum.core.Block;
+import org.ethereum.core.BlockFactory;
 import org.ethereum.core.BlockHeader;
 import org.ethereum.core.Bloom;
 import org.junit.Assert;
@@ -36,6 +37,8 @@ import java.util.List;
  * Created by ajlopez on 5/11/2016.
  */
 public class BlockStoreTest {
+    private static final BlockFactory blockFactory = new BlockFactory(ActivationConfigsForTest.all());
+
     @Test
     public void getUnknownBlockAsNull() {
         BlockStore store = new BlockStore();
@@ -218,11 +221,11 @@ public class BlockStoreTest {
     @Test
     public void saveHeader() {
         BlockStore store = new BlockStore();
-        BlockHeader blockHeader = new BlockHeader(new byte[]{},
+        BlockHeader blockHeader = blockFactory.newHeader(new byte[]{},
                 new byte[]{},
-                RskAddress.nullAddress().getBytes(),
+                TestUtils.randomAddress().getBytes(),
                 new Bloom().getData(),
-                new byte[]{},
+                null,
                 1,
                 new byte[]{},
                 0,
@@ -231,7 +234,7 @@ public class BlockStoreTest {
                 new byte[]{},
                 new byte[]{},
                 new byte[]{},
-                new byte[]{},
+                new byte[]{0},
                 0
         );
 
@@ -242,11 +245,11 @@ public class BlockStoreTest {
     @Test
     public void removeHeader() {
         BlockStore store = new BlockStore();
-        BlockHeader blockHeader = new BlockHeader(new byte[]{},
+        BlockHeader blockHeader = blockFactory.newHeader(new byte[]{},
                 new byte[]{},
-                RskAddress.nullAddress().getBytes(),
+                TestUtils.randomAddress().getBytes(),
                 new Bloom().getData(),
-                new byte[]{},
+                null,
                 1,
                 new byte[]{},
                 0,
@@ -255,7 +258,7 @@ public class BlockStoreTest {
                 new byte[]{},
                 new byte[]{},
                 new byte[]{},
-                new byte[]{},
+                new byte[]{0},
                 0
         );
 

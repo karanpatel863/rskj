@@ -25,9 +25,10 @@ import org.ethereum.net.rlpx.Node;
 import org.junit.Assert;
 import org.junit.Test;
 import org.mockito.Mockito;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.util.ArrayList;
+import java.util.OptionalInt;
 import java.util.UUID;
 
 /**
@@ -38,6 +39,7 @@ public class NodeChallengeManagerTest {
     private static final String KEY_1 = "bd1d20e480dfb1c9c07ba0bc8cf9052f89923d38b5128c5dbfc18d4eea38261f";
     private static final String HOST_1 = "localhost";
     private static final int PORT_1 = 44035;
+    private static final int NETWORK_ID = 1;
 
     private static final String KEY_2 = "bd2d20e480dfb1c9c07ba0bc8cf9052f89923d38b5128c5dbfc18d4eea38262f";
     private static final String HOST_2 = "localhost";
@@ -48,7 +50,8 @@ public class NodeChallengeManagerTest {
     private static final int PORT_3 = 44037;
 
     private static final long TIMEOUT = 30000;
-    private static final long REFRESH = 60000;
+    private static final long UPDATE = 60000;
+    private static final long CLEAN = 60000;
 
 
     @Test
@@ -62,7 +65,7 @@ public class NodeChallengeManagerTest {
         Node node3 = new Node(key3.getNodeId(), HOST_3, PORT_3);
 
         NodeDistanceTable distanceTable = new NodeDistanceTable(KademliaOptions.BINS, KademliaOptions.BUCKET_SIZE, node1);
-        PeerExplorer peerExplorer = new PeerExplorer(new ArrayList<>(), node1, distanceTable, new ECKey(), TIMEOUT, REFRESH);
+        PeerExplorer peerExplorer = new PeerExplorer(new ArrayList<>(), node1, distanceTable, new ECKey(), TIMEOUT, UPDATE, CLEAN, NETWORK_ID);
         peerExplorer.setUDPChannel(Mockito.mock(UDPChannel.class));
 
         NodeChallengeManager manager = new NodeChallengeManager();

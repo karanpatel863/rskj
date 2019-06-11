@@ -24,27 +24,30 @@ import co.rsk.bitcoinj.script.Script;
 import co.rsk.bitcoinj.script.ScriptBuilder;
 import co.rsk.bitcoinj.script.ScriptChunk;
 import co.rsk.bitcoinj.store.BlockStoreException;
-import co.rsk.bitcoinj.store.BtcBlockStore;
 import co.rsk.bitcoinj.wallet.SendRequest;
 import co.rsk.bitcoinj.wallet.Wallet;
 import co.rsk.config.BridgeConstants;
-import co.rsk.config.RskSystemProperties;
 import co.rsk.core.RskAddress;
 import co.rsk.crypto.Keccak256;
 import co.rsk.panic.PanicProcessor;
 import co.rsk.peg.utils.BridgeEventLogger;
 import co.rsk.peg.utils.BtcTransactionFormatUtils;
 import co.rsk.peg.utils.PartialMerkleTreeFormatUtils;
+import co.rsk.peg.whitelist.LockWhitelist;
+import co.rsk.peg.whitelist.LockWhitelistEntry;
+import co.rsk.peg.whitelist.OneOffWhiteListEntry;
+import co.rsk.peg.whitelist.UnlimitedWhiteListEntry;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.commons.lang3.tuple.Pair;
+import org.bouncycastle.util.encoders.Hex;
 import org.ethereum.core.Block;
 import org.ethereum.core.Repository;
 import org.ethereum.core.Transaction;
+import org.ethereum.crypto.ECKey;
 import org.ethereum.vm.PrecompiledContracts;
 import org.ethereum.vm.program.Program;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongycastle.util.encoders.Hex;
 
 import javax.annotation.Nullable;
 import java.io.IOException;
@@ -59,117 +62,104 @@ import java.util.stream.Collectors;
  * @author Oscar Guindzberg
  */
 public class BridgeSupport {
+    public static final RskAddress BURN_ADDRESS = new RskAddress("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
+
     public static final int MAX_RELEASE_ITERATIONS = 30;
 
     public static final Integer FEDERATION_CHANGE_GENERIC_ERROR_CODE = -10;
     public static final Integer LOCK_WHITELIST_GENERIC_ERROR_CODE = -10;
+    public static final Integer LOCK_WHITELIST_INVALID_ADDRESS_FORMAT_ERROR_CODE = -2;
+    public static final Integer LOCK_WHITELIST_ALREADY_EXISTS_ERROR_CODE = -1;
+    public static final Integer LOCK_WHITELIST_UNKNOWN_ERROR_CODE = 0;
+    public static final Integer LOCK_WHITELIST_SUCCESS_CODE = 1;
     public static final Integer FEE_PER_KB_GENERIC_ERROR_CODE = -10;
 
     private static final Logger logger = LoggerFactory.getLogger("BridgeSupport");
     private static final PanicProcessor panicProcessor = new PanicProcessor();
 
+    private static final String INVALID_ADDRESS_FORMAT_MESSAGE = "invalid address format";
+
     private final List<String> FEDERATION_CHANGE_FUNCTIONS = Collections.unmodifiableList(Arrays.asList(
             "create",
             "add",
+            "add-multi",
             "commit",
             "rollback"));
 
     private final BridgeConstants bridgeConstants;
     private final BridgeStorageProvider provider;
     private final Repository rskRepository;
-    private final RskSystemProperties config;
     private final BridgeEventLogger eventLogger;
 
     private final FederationSupport federationSupport;
 
-    private Context btcContext;
+    private final Context btcContext;
     private BtcBlockstoreWithCache btcBlockStore;
     private BtcBlockChain btcBlockChain;
-    private org.ethereum.core.Block rskExecutionBlock;
-
-    // Used by unit tests
-    public BridgeSupport(
-            RskSystemProperties config,
-            Repository repository,
-            BridgeEventLogger eventLogger,
-            BridgeConstants bridgeConstants,
-            BridgeStorageProvider provider,
-            BtcBlockstoreWithCache btcBlockStore,
-            BtcBlockChain btcBlockChain,
-            Block executionBlock) {
-        this(
-                repository,
-                provider,
-                executionBlock,
-                config,
-                bridgeConstants,
-                eventLogger
-        );
-        this.btcContext = new Context(this.bridgeConstants.getBtcParams());
-        this.btcBlockStore = btcBlockStore;
-        this.btcBlockChain = btcBlockChain;
-    }
+    private final org.ethereum.core.Block rskExecutionBlock;
 
     // Used by bridge
     public BridgeSupport(
-            RskSystemProperties config,
-            Repository repository,
+            BridgeConstants bridgeConstants,
+            BridgeStorageConfiguration bridgeStorageConfiguration,
             BridgeEventLogger eventLogger,
-            RskAddress contractAddress,
-            Block rskExecutionBlock) throws IOException, BlockStoreException {
+            Repository repository,
+            Block rskExecutionBlock,
+            RskAddress contractAddress) {
         this(
-                config,
-                repository,
-                eventLogger,
+                bridgeConstants,
                 new BridgeStorageProvider(
                         repository,
                         contractAddress,
-                        config.getBlockchainConfig().getCommonConstants().getBridgeConstants()
+                        bridgeConstants,
+                        bridgeStorageConfiguration
                 ),
-                rskExecutionBlock
+                eventLogger, repository, rskExecutionBlock, null, null
+        );
+    }
+
+    // Used by unit tests
+    public BridgeSupport(
+            BridgeConstants bridgeConstants,
+            BridgeStorageProvider provider,
+            BridgeEventLogger eventLogger,
+            Repository repository,
+            Block executionBlock,
+            BtcBlockstoreWithCache btcBlockStore,
+            BtcBlockChain btcBlockChain) {
+        this(
+                bridgeConstants, provider, eventLogger, repository, executionBlock,
+                new Context(bridgeConstants.getBtcParams()),
+                new FederationSupport(bridgeConstants, provider, executionBlock),
+                btcBlockStore, btcBlockChain
         );
     }
 
     public BridgeSupport(
-            RskSystemProperties config,
-            Repository repository,
-            BridgeEventLogger eventLogger,
-            BridgeStorageProvider provider,
-            Block rskExecutionBlock) throws IOException, BlockStoreException {
-        this(
-                repository,
-                provider,
-                rskExecutionBlock,
-                config,
-                config.getBlockchainConfig().getCommonConstants().getBridgeConstants(),
-                eventLogger
-        );
-        this.btcContext = new Context(this.bridgeConstants.getBtcParams());
-        this.btcBlockStore = buildRepositoryBlockStore();
-        this.btcBlockChain = new BtcBlockChain(btcContext, btcBlockStore);
-    }
-
-    // this constructor has all common parameters, mostly dependencies that aren't instantiated here
-    private BridgeSupport(
-            Repository repository,
-            BridgeStorageProvider provider,
-            Block executionBlock,
-            RskSystemProperties config,
             BridgeConstants bridgeConstants,
-            BridgeEventLogger eventLogger) {
+            BridgeStorageProvider provider,
+            BridgeEventLogger eventLogger,
+            Repository repository,
+            Block executionBlock,
+            Context btcContext,
+            FederationSupport federationSupport,
+            BtcBlockstoreWithCache btcBlockStore,
+            BtcBlockChain btcBlockChain) {
         this.rskRepository = repository;
         this.provider = provider;
         this.rskExecutionBlock = executionBlock;
-        this.config = config;
         this.bridgeConstants = bridgeConstants;
         this.eventLogger = eventLogger;
-        this.federationSupport = new FederationSupport(provider, bridgeConstants, executionBlock);
+        this.btcContext = btcContext;
+        this.federationSupport = federationSupport;
+        this.btcBlockStore = btcBlockStore;
+        this.btcBlockChain = btcBlockChain;
     }
 
     private RepositoryBlockStore buildRepositoryBlockStore() throws BlockStoreException, IOException {
         NetworkParameters btcParams = this.bridgeConstants.getBtcParams();
         RepositoryBlockStore btcBlockStore = new RepositoryBlockStore(
-                this.config,
+                bridgeConstants,
                 this.rskRepository,
                 PrecompiledContracts.BRIDGE_ADDR
         );
@@ -202,7 +192,7 @@ public class BridgeSupport {
      * Receives an array of serialized Bitcoin block headers and adds them to the internal BlockChain structure.
      * @param headers The bitcoin headers
      */
-    public void receiveHeaders(BtcBlock[] headers) {
+    public void receiveHeaders(BtcBlock[] headers) throws IOException {
         if (headers.length > 0) {
             logger.debug("Received {} headers. First {}, last {}.", headers.length, headers[0].getHash(), headers[headers.length - 1].getHash());
         } else {
@@ -210,6 +200,7 @@ public class BridgeSupport {
         }
 
         Context.propagate(btcContext);
+        this.ensureBtcBlockChain();
         for (int i = 0; i < headers.length; i++) {
             try {
                 btcBlockChain.add(headers[i]);
@@ -286,6 +277,7 @@ public class BridgeSupport {
      */
     public void registerBtcTransaction(Transaction rskTx, byte[] btcTxSerialized, int height, byte[] pmtSerialized) throws IOException, BlockStoreException {
         Context.propagate(btcContext);
+
         Sha256Hash btcTxHash = BtcTransactionFormatUtils.calculateBtcTxHash(btcTxSerialized);
         // Check the tx was not already processed
         if (provider.getBtcTxHashesAlreadyProcessed().keySet().contains(btcTxHash)) {
@@ -318,7 +310,8 @@ public class BridgeSupport {
         }
 
         // Check there are at least N blocks on top of the supplied height
-        int confirmations = btcBlockChain.getBestChainHeight() - height + 1;
+        int btcBestChainHeight = getBtcBlockchainBestChainHeight();
+        int confirmations = btcBestChainHeight - height + 1;
         if (confirmations < bridgeConstants.getBtc2RskMinimumAcceptableConfirmations()) {
             logger.warn(
                     "At least {} confirmations are required, but there are only {} confirmations",
@@ -335,6 +328,7 @@ public class BridgeSupport {
         }
 
         // Check the the merkle root equals merkle root of btc block at specified height in the btc best chain
+        // BTC blockstore is available since we've already queried the best chain height
         BtcBlock blockHeader = BridgeUtils.getStoredBlockAtHeight(btcBlockStore, height).getHeader();
         if (!blockHeader.getMerkleRoot().equals(merkleRoot)) {
             String panicMessage = String.format(
@@ -352,7 +346,7 @@ public class BridgeSupport {
 
         boolean locked = true;
 
-        Federation federation = getActiveFederation();
+        Federation activeFederation = getActiveFederation();
         // Specific code for lock/release/none txs
         if (BridgeUtils.isLockTx(btcTx, getLiveFederations(), btcContext, bridgeConstants)) {
             logger.debug("This is a lock tx {}", btcTx);
@@ -419,7 +413,7 @@ public class BridgeSupport {
                     logger.info("whitelist money return tx build successful to {}. Tx {}. Value {}.", senderBtcAddress, rskTx, totalAmount);
                 } else {
                     logger.warn("whitelist money return tx build for btc tx {} error. Return was to {}. Tx {}. Value {}", btcTx.getHash(), senderBtcAddress, rskTx, totalAmount);
-                    panicProcessor.panic("whitelist-return-funds", String.format("whitelist money return tx build for btc tx {} error. Return was to {}. Tx {}. Value {}", btcTx.getHash(), senderBtcAddress, rskTx, totalAmount));
+                    panicProcessor.panic("whitelist-return-funds", String.format("whitelist money return tx build for btc tx %s error. Return was to %s. Tx %s. Value %s", btcTx.getHash(), senderBtcAddress, rskTx, totalAmount));
                 }
             } else {
                 org.ethereum.crypto.ECKey key = org.ethereum.crypto.ECKey.fromPublicOnly(data);
@@ -430,9 +424,13 @@ public class BridgeSupport {
                         sender,
                         co.rsk.core.Coin.fromBitcoin(totalAmount)
                 );
-                lockWhitelist.remove(senderBtcAddress);
+
+                logger.info("Transferring from BTC Address {}. RSK Address: {}.", senderBtcAddress, sender);
+
+                // Consume this whitelisted address
+                lockWhitelist.consume(senderBtcAddress);
             }
-        } else if (BridgeUtils.isReleaseTx(btcTx, federation, bridgeConstants)) {
+        } else if (BridgeUtils.isReleaseTx(btcTx, getLiveFederations())) {
             logger.debug("This is a release tx {}", btcTx);
             // do-nothing
             // We could call removeUsedUTXOs(btcTx) here, but we decided to not do that.
@@ -444,7 +442,7 @@ public class BridgeSupport {
             // When is not guaranteed to be called in the chronological order, so a Federator can inform
             // b) In prod: Federator created a tx manually or the federation was compromised and some utxos were spent. Better not try to spend them.
             // Open problem: For performance removeUsedUTXOs() just removes 1 utxo
-        } else if (BridgeUtils.isMigrationTx(btcTx, getActiveFederation(), getRetiringFederation(), btcContext, bridgeConstants)) {
+        } else if (BridgeUtils.isMigrationTx(btcTx, activeFederation, getRetiringFederation(), btcContext, bridgeConstants)) {
             logger.debug("This is a migration tx {}", btcTx);
         } else {
             logger.warn("This is not a lock, a release nor a migration tx {}", btcTx);
@@ -494,10 +492,9 @@ public class BridgeSupport {
      * @throws IOException
      */
     public void releaseBtc(Transaction rskTx) throws IOException {
-        byte[] senderCode = rskRepository.getCode(rskTx.getSender());
 
         //as we can't send btc from contracts we want to send them back to the sender
-        if (senderCode != null && senderCode.length > 0) {
+        if (BridgeUtils.isContractTx(rskTx)) {
             logger.trace("Contract {} tried to release funds. Release is just allowed from standard accounts.", rskTx);
             throw new Program.OutOfGasException("Contract calling releaseBTC");
         }
@@ -693,8 +690,7 @@ public class BridgeSupport {
                 logger.warn(
                         "Couldn't build a release BTC tx for <{}, {}>",
                         releaseRequest.getDestination().toBase58(),
-                        releaseRequest.getAmount().toString()
-                );
+                        releaseRequest.getAmount());
                 return false;
             }
 
@@ -802,8 +798,7 @@ public class BridgeSupport {
         Coin spentByFederation = sumInputs.subtract(change);
         if (spentByFederation.isLessThan(sentByUser)) {
             Coin coinsToBurn = sentByUser.subtract(spentByFederation);
-            RskAddress burnAddress = config.getBlockchainConfig().getCommonConstants().getBurnAddress();
-            rskRepository.transfer(PrecompiledContracts.BRIDGE_ADDR, burnAddress, co.rsk.core.Coin.fromBitcoin(coinsToBurn));
+            rskRepository.transfer(PrecompiledContracts.BRIDGE_ADDR, BURN_ADDRESS, co.rsk.core.Coin.fromBitcoin(coinsToBurn));
         }
     }
 
@@ -819,7 +814,7 @@ public class BridgeSupport {
     public void addSignature(BtcECKey federatorPublicKey, List<byte[]> signatures, byte[] rskTxHash) throws Exception {
         Context.propagate(btcContext);
         Federation retiringFederation = getRetiringFederation();
-        if (!getActiveFederation().getPublicKeys().contains(federatorPublicKey) && (retiringFederation == null || !retiringFederation.getPublicKeys().contains(federatorPublicKey))) {
+        if (!getActiveFederation().getBtcPublicKeys().contains(federatorPublicKey) && (retiringFederation == null || !retiringFederation.getBtcPublicKeys().contains(federatorPublicKey))) {
             logger.warn("Supplied federator public key {} does not belong to any of the federators.", federatorPublicKey);
             return;
         }
@@ -896,10 +891,10 @@ public class BridgeSupport {
                     logger.debug("Tx input {} for tx {} signed.", i, new Keccak256(rskTxHash));
                 } catch (IllegalStateException e) {
                     Federation retiringFederation = getRetiringFederation();
-                    if (getActiveFederation().hasPublicKey(federatorPublicKey)) {
+                    if (getActiveFederation().hasBtcPublicKey(federatorPublicKey)) {
                         logger.debug("A member of the active federation is trying to sign a tx of the retiring one");
                         return;
-                    } else if (retiringFederation != null && retiringFederation.hasPublicKey(federatorPublicKey)) {
+                    } else if (retiringFederation != null && retiringFederation.hasBtcPublicKey(federatorPublicKey)) {
                         logger.debug("A member of the retiring federation is trying to sign a tx of the active one");
                         return;
                     }
@@ -991,18 +986,28 @@ public class BridgeSupport {
      * Returns the bitcoin blockchain best chain height know by the bridge contract
      */
     public int getBtcBlockchainBestChainHeight() throws IOException {
-        return btcBlockChain.getChainHead().getHeight();
+        return getBtcBlockchainChainHead().getHeight();
     }
 
     /**
-     * Returns an array of block hashes known by the bridge contract. Federators can use this to find what is the latest block in the mainchain the bridge has.
+     * Returns the bitcoin blockchain initial stored block height
+     */
+    public int getBtcBlockchainInitialBlockHeight() throws IOException {
+        return getLowestBlock().getHeight();
+    }
+
+    /**
+     * @deprecated
+     * Returns an array of block hashes known by the bridge contract.
+     * Federators can use this to find what is the latest block in the mainchain the bridge has.
      * @return a List of bitcoin block hashes
      */
+    @Deprecated
     public List<Sha256Hash> getBtcBlockchainBlockLocator() throws IOException {
         StoredBlock  initialBtcStoredBlock = this.getLowestBlock();
         final int maxHashesToInform = 100;
         List<Sha256Hash> blockLocator = new ArrayList<>();
-        StoredBlock cursor = btcBlockChain.getChainHead();
+        StoredBlock cursor = getBtcBlockchainChainHead();
         int bestBlockHeight = cursor.getHeight();
         blockLocator.add(cursor.getHeader().getHash());
         if (bestBlockHeight > initialBtcStoredBlock.getHeight()) {
@@ -1030,6 +1035,27 @@ public class BridgeSupport {
             }
         }
         return blockLocator;
+    }
+
+    public Sha256Hash getBtcBlockchainBlockHashAtDepth(int depth) throws BlockStoreException, IOException {
+        Context.propagate(btcContext);
+        this.ensureBtcBlockChain();
+        
+        StoredBlock head = btcBlockChain.getChainHead();
+
+        int maxDepth = head.getHeight() - getLowestBlock().getHeight();
+
+        if (depth < 0 || depth > maxDepth) {
+            throw new IndexOutOfBoundsException(String.format("Depth must be between 0 and %d", maxDepth));
+        }
+
+        int currentDepth = 0;
+        StoredBlock current = head;
+        while (currentDepth < depth) {
+            current = current.getPrev(btcBlockStore);
+            currentDepth++;
+        }
+        return current.getHeader().getHash();
     }
 
     private StoredBlock getPrevBlockAtHeight(StoredBlock cursor, int height) throws BlockStoreException {
@@ -1117,7 +1143,7 @@ public class BridgeSupport {
      * @return the federation size
      */
     public Integer getFederationSize() {
-        return federationSupport.getFederationSize();
+        return getActiveFederation().getBtcPublicKeys().size();
     }
 
     /**
@@ -1134,7 +1160,17 @@ public class BridgeSupport {
      * @return the federator's public key
      */
     public byte[] getFederatorPublicKey(int index) {
-        return federationSupport.getFederatorPublicKey(index);
+        return federationSupport.getFederatorBtcPublicKey(index);
+    }
+
+    /**
+     * Returns the public key of given type of the federation's federator at the given index
+     * @param index the federator's index (zero-based)
+     * @param keyType the key type
+     * @return the federator's public key
+     */
+    public byte[] getFederatorPublicKeyOfType(int index, FederationMember.KeyType keyType) {
+        return federationSupport.getFederatorPublicKeyOfType(index, keyType);
     }
 
     /**
@@ -1177,7 +1213,7 @@ public class BridgeSupport {
             return -1;
         }
 
-        return retiringFederation.getPublicKeys().size();
+        return retiringFederation.getBtcPublicKeys().size();
     }
 
     /**
@@ -1204,13 +1240,28 @@ public class BridgeSupport {
             return null;
         }
 
-        List<BtcECKey> publicKeys = retiringFederation.getPublicKeys();
+        List<BtcECKey> publicKeys = retiringFederation.getBtcPublicKeys();
 
         if (index < 0 || index >= publicKeys.size()) {
-            throw new IndexOutOfBoundsException(String.format("Retiring federator index must be between 0 and {}", publicKeys.size() - 1));
+            throw new IndexOutOfBoundsException(String.format("Retiring federator index must be between 0 and %d", publicKeys.size() - 1));
         }
 
         return publicKeys.get(index).getPubKey();
+    }
+
+    /**
+     * Returns the public key of the given type of the retiring federation's federator at the given index
+     * @param index the retiring federator's index (zero-based)
+     * @param keyType the key type
+     * @return the retiring federator's public key of the given type, null if no retiring federation exists
+     */
+    public byte[] getRetiringFederatorPublicKeyOfType(int index, FederationMember.KeyType keyType) {
+        Federation retiringFederation = getRetiringFederation();
+        if (retiringFederation == null) {
+            return null;
+        }
+
+        return federationSupport.getMemberPublicKeyOfType(retiringFederation.getMembers(), index, keyType, "Retiring federator");
     }
 
     /**
@@ -1297,19 +1348,24 @@ public class BridgeSupport {
     }
 
     /**
-     * Adds the given key to the current pending federation
+     * Adds the given keys to the current pending federation.
+     *
      * @param dryRun whether to just do a dry run
-     * @param key the public key to add
+     * @param btcKey the BTC public key to add
+     * @param rskKey the RSK public key to add
+     * @param mstKey the MST public key to add
      * @return 1 upon success, -1 if there was no pending federation, -2 if the key was already in the pending federation
      */
-    private Integer addFederatorPublicKey(boolean dryRun, BtcECKey key) {
+    private Integer addFederatorPublicKeyMultikey(boolean dryRun, BtcECKey btcKey, ECKey rskKey, ECKey mstKey) {
         PendingFederation currentPendingFederation = provider.getPendingFederation();
 
         if (currentPendingFederation == null) {
             return -1;
         }
 
-        if (currentPendingFederation.getPublicKeys().contains(key)) {
+        if (currentPendingFederation.getBtcPublicKeys().contains(btcKey) ||
+            currentPendingFederation.getMembers().stream().map(m -> m.getRskPublicKey()).anyMatch(k -> k.equals(rskKey)) ||
+            currentPendingFederation.getMembers().stream().map(m -> m.getMstPublicKey()).anyMatch(k -> k.equals(mstKey))) {
             return -2;
         }
 
@@ -1317,7 +1373,9 @@ public class BridgeSupport {
             return 1;
         }
 
-        currentPendingFederation = currentPendingFederation.addPublicKey(key);
+        FederationMember member = new FederationMember(btcKey, rskKey, mstKey);
+
+        currentPendingFederation = currentPendingFederation.addMember(member);
 
         provider.setPendingFederation(currentPendingFederation);
 
@@ -1467,14 +1525,39 @@ public class BridgeSupport {
                 result = new ABICallVoteResult(executionResult == 1, executionResult);
                 break;
             case "add":
-                byte[] publicKeyBytes = (byte[]) callSpec.getArguments()[0];
+                byte[] publicKeyBytes = callSpec.getArguments()[0];
                 BtcECKey publicKey;
+                ECKey publicKeyEc;
                 try {
                     publicKey = BtcECKey.fromPublicOnly(publicKeyBytes);
+                    publicKeyEc = ECKey.fromPublicOnly(publicKeyBytes);
                 } catch (Exception e) {
                     throw new BridgeIllegalArgumentException("Public key could not be parsed " + Hex.toHexString(publicKeyBytes), e);
                 }
-                executionResult = addFederatorPublicKey(dryRun, publicKey);
+                executionResult = addFederatorPublicKeyMultikey(dryRun, publicKey, publicKeyEc, publicKeyEc);
+                result = new ABICallVoteResult(executionResult == 1, executionResult);
+                break;
+            case "add-multi":
+                BtcECKey btcPublicKey;
+                ECKey rskPublicKey, mstPublicKey;
+                try {
+                    btcPublicKey = BtcECKey.fromPublicOnly(callSpec.getArguments()[0]);
+                } catch (Exception e) {
+                    throw new BridgeIllegalArgumentException("BTC public key could not be parsed " + Hex.toHexString(callSpec.getArguments()[0]), e);
+                }
+
+                try {
+                    rskPublicKey = ECKey.fromPublicOnly(callSpec.getArguments()[1]);
+                } catch (Exception e) {
+                    throw new BridgeIllegalArgumentException("RSK public key could not be parsed " + Hex.toHexString(callSpec.getArguments()[1]), e);
+                }
+
+                try {
+                    mstPublicKey = ECKey.fromPublicOnly(callSpec.getArguments()[2]);
+                } catch (Exception e) {
+                    throw new BridgeIllegalArgumentException("MST public key could not be parsed " + Hex.toHexString(callSpec.getArguments()[2]), e);
+                }
+                executionResult = addFederatorPublicKeyMultikey(dryRun, btcPublicKey, rskPublicKey, mstPublicKey);
                 result = new ABICallVoteResult(executionResult == 1, executionResult);
                 break;
             case "commit":
@@ -1519,11 +1602,11 @@ public class BridgeSupport {
             return -1;
         }
 
-        return currentPendingFederation.getPublicKeys().size();
+        return currentPendingFederation.getBtcPublicKeys().size();
     }
 
     /**
-     * Returns the currently pending federation threshold, or null if none exists
+     * Returns the currently pending federation federator's public key at the given index, or null if none exists
      * @param index the federator's index (zero-based)
      * @return the pending federation's federator public key
      */
@@ -1534,13 +1617,29 @@ public class BridgeSupport {
             return null;
         }
 
-        List<BtcECKey> publicKeys = currentPendingFederation.getPublicKeys();
+        List<BtcECKey> publicKeys = currentPendingFederation.getBtcPublicKeys();
 
         if (index < 0 || index >= publicKeys.size()) {
-            throw new IndexOutOfBoundsException(String.format("Federator index must be between 0 and {}", publicKeys.size() - 1));
+            throw new IndexOutOfBoundsException(String.format("Federator index must be between 0 and %d", publicKeys.size() - 1));
         }
 
         return publicKeys.get(index).getPubKey();
+    }
+
+    /**
+     * Returns the public key of the given type of the pending federation's federator at the given index
+     * @param index the federator's index (zero-based)
+     * @param keyType the key type
+     * @return the pending federation's federator public key of given type
+     */
+    public byte[] getPendingFederatorPublicKeyOfType(int index, FederationMember.KeyType keyType) {
+        PendingFederation currentPendingFederation = provider.getPendingFederation();
+
+        if (currentPendingFederation == null) {
+            return null;
+        }
+
+        return federationSupport.getMemberPublicKeyOfType(currentPendingFederation.getMembers(), index, keyType, "Federator");
     }
 
     /**
@@ -1559,14 +1658,29 @@ public class BridgeSupport {
      * @param index the index at which to get the address
      * @return the base58-encoded address stored at the given index, or null if index is out of bounds
      */
-    public String getLockWhitelistAddress(int index) {
-        List<Address> addresses = provider.getLockWhitelist().getAddresses();
+    public LockWhitelistEntry getLockWhitelistEntryByIndex(int index) {
+        List<LockWhitelistEntry> entries = provider.getLockWhitelist().getAll();
 
-        if (index < 0 || index >= addresses.size()) {
+        if (index < 0 || index >= entries.size()) {
             return null;
         }
 
-        return addresses.get(index).toBase58();
+        return entries.get(index);
+    }
+
+    /**
+     *
+     * @param addressBase58
+     * @return
+     */
+    public LockWhitelistEntry getLockWhitelistEntryByAddress(String addressBase58) {
+        try {
+            Address address = getParsedAddress(addressBase58);
+            return provider.getLockWhitelist().get(address);
+        } catch (AddressFormatException e) {
+            logger.warn(INVALID_ADDRESS_FORMAT_MESSAGE, e);
+            return null;
+        }
     }
 
     /**
@@ -1579,7 +1693,28 @@ public class BridgeSupport {
      * in the whitelist, -2 if address is invalid
      * LOCK_WHITELIST_GENERIC_ERROR_CODE otherwise.
      */
-    public Integer addLockWhitelistAddress(Transaction tx, String addressBase58, BigInteger maxTransferValue) {
+    public Integer addOneOffLockWhitelistAddress(Transaction tx, String addressBase58, BigInteger maxTransferValue) {
+        try {
+            Address address = getParsedAddress(addressBase58);
+            Coin maxTransferValueCoin = Coin.valueOf(maxTransferValue.longValueExact());
+            return this.addLockWhitelistAddress(tx, new OneOffWhiteListEntry(address, maxTransferValueCoin));
+        } catch (AddressFormatException e) {
+            logger.warn(INVALID_ADDRESS_FORMAT_MESSAGE, e);
+            return LOCK_WHITELIST_INVALID_ADDRESS_FORMAT_ERROR_CODE;
+        }
+    }
+
+    public Integer addUnlimitedLockWhitelistAddress(Transaction tx, String addressBase58) {
+        try {
+            Address address = getParsedAddress(addressBase58);
+            return this.addLockWhitelistAddress(tx, new UnlimitedWhiteListEntry(address));
+        } catch (AddressFormatException e) {
+            logger.warn(INVALID_ADDRESS_FORMAT_MESSAGE, e);
+            return LOCK_WHITELIST_INVALID_ADDRESS_FORMAT_ERROR_CODE;
+        }
+    }
+
+    private Integer addLockWhitelistAddress(Transaction tx, LockWhitelistEntry entry) {
         if (!isLockWhitelistChangeAuthorized(tx)) {
             return LOCK_WHITELIST_GENERIC_ERROR_CODE;
         }
@@ -1587,19 +1722,15 @@ public class BridgeSupport {
         LockWhitelist whitelist = provider.getLockWhitelist();
 
         try {
-            Address address = Address.fromBase58(btcContext.getParams(), addressBase58);
-
-            if (whitelist.isWhitelisted(address)) {
-                return -1;
+            if (whitelist.isWhitelisted(entry.address())) {
+                return LOCK_WHITELIST_ALREADY_EXISTS_ERROR_CODE;
             }
-            whitelist.put(address, Coin.valueOf(maxTransferValue.longValueExact()));
-            return 1;
-        } catch (AddressFormatException e) {
-            return -2;
+            whitelist.put(entry.address(), entry);
+            return LOCK_WHITELIST_SUCCESS_CODE;
         } catch (Exception e) {
-            logger.error("Unexpected error in addLockWhitelistAddress: {}", e.getMessage());
+            logger.error("Unexpected error in addLockWhitelistAddress: {}", e);
             panicProcessor.panic("lock-whitelist", e.getMessage());
-            return 0;
+            return LOCK_WHITELIST_UNKNOWN_ERROR_CODE;
         }
     }
 
@@ -1626,7 +1757,7 @@ public class BridgeSupport {
         LockWhitelist whitelist = provider.getLockWhitelist();
 
         try {
-            Address address = Address.fromBase58(btcContext.getParams(), addressBase58);
+            Address address = getParsedAddress(addressBase58);
 
             if (!whitelist.remove(address)) {
                 return -1;
@@ -1704,22 +1835,33 @@ public class BridgeSupport {
      * @param disableBlockDelayBI block since current BTC best chain height to disable lock whitelist
      * @return 1 if it was successful, -1 if a delay was already set, -2 if disableBlockDelay contains an invalid value
      */
-    public Integer setLockWhitelistDisableBlockDelay(Transaction tx, BigInteger disableBlockDelayBI) {
+    public Integer setLockWhitelistDisableBlockDelay(Transaction tx, BigInteger disableBlockDelayBI) throws IOException {
         if (!isLockWhitelistChangeAuthorized(tx)) {
             return LOCK_WHITELIST_GENERIC_ERROR_CODE;
         }
-
         LockWhitelist lockWhitelist = provider.getLockWhitelist();
         if (lockWhitelist.isDisableBlockSet()) {
             return -1;
         }
         int disableBlockDelay = disableBlockDelayBI.intValueExact();
-        int bestChainHeight = btcBlockChain.getBestChainHeight();
-        if (bestChainHeight < 0 || Integer.MAX_VALUE - disableBlockDelay < bestChainHeight) {
+        int bestChainHeight = getBtcBlockchainBestChainHeight();
+        if (disableBlockDelay + bestChainHeight <= bestChainHeight) {
             return -2;
         }
         lockWhitelist.setDisableBlockHeight(bestChainHeight + disableBlockDelay);
         return 1;
+    }
+
+    private StoredBlock getBtcBlockchainChainHead() throws IOException {
+        // Gather the current btc chain's head
+        // IMPORTANT: we assume that getting the chain head from the btc blockstore
+        // is enough since we're not manipulating the blockchain here, just querying it.
+        try {
+            this.ensureBtcBlockStore();
+            return btcBlockStore.getChainHead();
+        } catch (BlockStoreException e) {
+            throw new IOException(e);
+        }
     }
 
     /**
@@ -1736,11 +1878,6 @@ public class BridgeSupport {
         // Go back 1 week to match CheckpointManager.checkpoint() behaviour
         time -= 86400 * 7;
         return manager.getCheckpointBefore(time);
-    }
-
-    @VisibleForTesting
-    BtcBlockStore getBtcBlockStore() {
-        return btcBlockStore;
     }
 
     private Pair<BtcTransaction, List<UTXO>> createMigrationTransaction(Wallet originWallet, Address destinationAddress) {
@@ -1779,6 +1916,34 @@ public class BridgeSupport {
                 throw new RuntimeException("Unexpected UTXO provider error", e);
             }
         }
+    }
+
+    // Make sure the local bitcoin blockchain is instantiated
+    private void ensureBtcBlockChain() throws IOException {
+        this.ensureBtcBlockStore();
+
+        if (this.btcBlockChain == null) {
+            try {
+                this.btcBlockChain = new BtcBlockChain(btcContext, btcBlockStore);
+            } catch (BlockStoreException e) {
+                throw new IOException(e);
+            }
+        }
+    }
+
+    // Make sure the local bitcoin blockstore is instantiated
+    private void ensureBtcBlockStore() throws IOException {
+        if (this.btcBlockStore == null) {
+            try {
+                this.btcBlockStore = this.buildRepositoryBlockStore();
+            } catch (BlockStoreException e) {
+                throw new IOException(e);
+            }
+        }
+    }
+
+    private Address getParsedAddress(String base58Address) throws AddressFormatException {
+        return Address.fromBase58(btcContext.getParams(), base58Address);
     }
 }
 

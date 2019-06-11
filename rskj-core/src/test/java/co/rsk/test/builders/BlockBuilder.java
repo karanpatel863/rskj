@@ -20,22 +20,26 @@ package co.rsk.test.builders;
 
 import co.rsk.blockchain.utils.BlockGenerator;
 import co.rsk.config.TestSystemProperties;
-import co.rsk.core.bc.BlockChainImpl;
+import co.rsk.core.TransactionExecutorFactory;
 import co.rsk.core.bc.BlockExecutor;
+import co.rsk.db.RepositoryLocator;
+import co.rsk.db.StateRootHandler;
 import co.rsk.test.World;
-import org.ethereum.core.Block;
-import org.ethereum.core.BlockHeader;
-import org.ethereum.core.Transaction;
-import org.spongycastle.util.BigIntegers;
+import co.rsk.trie.TrieConverter;
+import org.bouncycastle.util.BigIntegers;
+import org.ethereum.core.*;
+import org.ethereum.datasource.HashMapDB;
+import org.ethereum.vm.program.invoke.ProgramInvokeFactoryImpl;
 
 import java.math.BigInteger;
+import java.util.HashMap;
 import java.util.List;
 
 /**
  * Created by ajlopez on 8/6/2016.
  */
 public class BlockBuilder {
-    private BlockChainImpl blockChain;
+    private Blockchain blockChain;
     private final BlockGenerator blockGenerator;
     private Block parent;
     private long difficulty;
@@ -52,11 +56,11 @@ public class BlockBuilder {
         this(world.getBlockChain(), new BlockGenerator());
     }
 
-    public BlockBuilder(BlockChainImpl blockChain) {
+    public BlockBuilder(Blockchain blockChain) {
         this(blockChain, new BlockGenerator());
     }
 
-    public BlockBuilder(BlockChainImpl blockChain, BlockGenerator blockGenerator) {
+    private BlockBuilder(Blockchain blockChain, BlockGenerator blockGenerator) {
         this.blockChain = blockChain;
         this.blockGenerator = blockGenerator;
         // sane defaults
@@ -101,8 +105,21 @@ public class BlockBuilder {
         Block block = blockGenerator.createChildBlock(parent, txs, uncles, difficulty, this.minGasPrice, gasLimit);
 
         if (blockChain != null) {
-            BlockExecutor executor = new BlockExecutor(new TestSystemProperties(), blockChain.getRepository(), null, blockChain.getBlockStore(), blockChain.getListener());
-            executor.executeAndFill(block, parent);
+            final TestSystemProperties config = new TestSystemProperties();
+            StateRootHandler stateRootHandler = new StateRootHandler(config.getActivationConfig(), new TrieConverter(), new HashMapDB(), new HashMap<>());
+            BlockExecutor executor = new BlockExecutor(
+                    config.getActivationConfig(),
+                    new RepositoryLocator(blockChain.getRepository(), stateRootHandler),
+                    stateRootHandler,
+                    new TransactionExecutorFactory(
+                            config,
+                            blockChain.getBlockStore(),
+                            null,
+                            new BlockFactory(config.getActivationConfig()),
+                            new ProgramInvokeFactoryImpl()
+                    )
+            );
+            executor.executeAndFill(block, parent.getHeader());
         }
 
         return block;

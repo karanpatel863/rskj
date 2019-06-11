@@ -26,7 +26,7 @@ import org.ethereum.util.RLPElement;
 import org.ethereum.util.RLPItem;
 import org.ethereum.util.RLPList;
 
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -59,7 +59,7 @@ public class LogInfo {
 
         for (RLPElement topic1 : topics) {
             byte[] topic = topic1.getRLPData();
-            this.topics.add(new DataWord(topic));
+            this.topics.add(DataWord.valueOf(topic));
         }
 
         rlpEncoded = rlp;

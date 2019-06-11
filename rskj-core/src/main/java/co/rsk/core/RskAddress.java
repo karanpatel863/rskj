@@ -21,7 +21,7 @@ package co.rsk.core;
 import com.google.common.primitives.UnsignedBytes;
 import org.ethereum.rpc.TypeConverter;
 import org.ethereum.vm.DataWord;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.util.Arrays;
 import java.util.Comparator;
@@ -37,9 +37,9 @@ public class RskAddress {
     /**
      * This is the size of an RSK address in bytes.
      */
-    private static final int LENGTH_IN_BYTES = 20;
+    public static final int LENGTH_IN_BYTES = 20;
 
-    private static final RskAddress NULL_ADDRESS = new RskAddress(new byte[LENGTH_IN_BYTES]);
+    private static final RskAddress NULL_ADDRESS = new RskAddress();
 
     /**
      * This compares using the lexicographical order of the sender unsigned bytes.
@@ -76,6 +76,13 @@ public class RskAddress {
     }
 
     /**
+     * This instantiates the contract creation address.
+     */
+    private RskAddress() {
+        this.bytes = new byte[0];
+    }
+
+    /**
      * @return the null address, which is the receiver of contract creation transactions.
      */
     public static RskAddress nullAddress() {
@@ -84,6 +91,10 @@ public class RskAddress {
 
     public byte[] getBytes() {
         return bytes;
+    }
+
+    public String toHexString() {
+        return Hex.toHexString(bytes);
     }
 
     @Override
@@ -105,8 +116,11 @@ public class RskAddress {
         return Arrays.hashCode(bytes);
     }
 
+    /**
+     * @return a DEBUG representation of the address, mainly used for logging.
+     */
     @Override
     public String toString() {
-        return Hex.toHexString(bytes);
+        return toHexString();
     }
 }

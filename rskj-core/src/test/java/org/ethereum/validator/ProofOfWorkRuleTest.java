@@ -25,9 +25,13 @@ import co.rsk.config.RskMiningConstants;
 import co.rsk.config.TestSystemProperties;
 import co.rsk.crypto.Keccak256;
 import co.rsk.mine.MinerUtils;
+import co.rsk.mine.ParameterizedNetworkUpgradeTest;
 import co.rsk.util.DifficultyUtils;
 import co.rsk.validators.ProofOfWorkRule;
+import org.ethereum.config.Constants;
+import org.ethereum.config.blockchain.upgrades.ActivationConfig;
 import org.ethereum.core.Block;
+import org.ethereum.core.BlockFactory;
 import org.junit.Assert;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -38,7 +42,6 @@ import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
-import static co.rsk.mine.MinerServerImpl.getBitcoinMergedMerkleBranch;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -46,14 +49,25 @@ import static org.junit.Assert.assertTrue;
  * @author Mikhail Kalinin
  * @since 02.09.2015
  */
-public class ProofOfWorkRuleTest {
+public class ProofOfWorkRuleTest extends ParameterizedNetworkUpgradeTest {
 
-    private ProofOfWorkRule rule = new ProofOfWorkRule(new TestSystemProperties()).setFallbackMiningEnabled(false);
+    private final ActivationConfig activationConfig;
+    private final Constants networkConstants;
+    private ProofOfWorkRule rule;
+    private BlockFactory blockFactory;
+
+    public ProofOfWorkRuleTest(TestSystemProperties config) {
+        super(config);
+        this.rule = new ProofOfWorkRule(config).setFallbackMiningEnabled(false);
+        this.activationConfig = config.getActivationConfig();
+        this.networkConstants = config.getNetworkConstants();
+        this.blockFactory = new BlockFactory(activationConfig);
+    }
 
     @Test
     public void test_1() {
         // mined block
-        Block b = BlockMiner.mineBlock(new BlockGenerator().getBlock(1));
+        Block b = new BlockMiner(activationConfig).mineBlock(new BlockGenerator(networkConstants, activationConfig).getBlock(1));
         assertTrue(rule.isValid(b));
     }
 
@@ -61,7 +75,7 @@ public class ProofOfWorkRuleTest {
     @Test // invalid block
     public void test_2() {
         // mined block
-        Block b = BlockMiner.mineBlock(new BlockGenerator().getBlock(1));
+        Block b = new BlockMiner(activationConfig).mineBlock(new BlockGenerator(networkConstants, activationConfig).getBlock(1));
         byte[] mergeMiningHeader = b.getBitcoinMergedMiningHeader();
         // TODO improve, the mutated block header could be still valid
         mergeMiningHeader[0]++;
@@ -73,11 +87,11 @@ public class ProofOfWorkRuleTest {
     @Test
     public void test_RLPEncoding() {
         // mined block
-        Block b = BlockMiner.mineBlock(new BlockGenerator().getBlock(1));
+        Block b = new BlockMiner(activationConfig).mineBlock(new BlockGenerator(networkConstants, activationConfig).getBlock(1));
         byte[] lastField = b.getBitcoinMergedMiningCoinbaseTransaction(); // last field
         b.flushRLP();// force re-encode
         byte[] encoded = b.getEncoded();
-        Block b2 = new Block(encoded);
+        Block b2 = blockFactory.decodeBlock(encoded);
         byte[] lastField2 = b2.getBitcoinMergedMiningCoinbaseTransaction(); // last field
         b2.flushRLP();// force re-encode
         byte[] encoded2 = b2.getEncoded();
@@ -91,7 +105,7 @@ public class ProofOfWorkRuleTest {
         int iterCnt = 1_000_000;
 
         // mined block
-        Block b = BlockMiner.mineBlock(new BlockGenerator().getBlock(1));
+        Block b = new BlockMiner(activationConfig).mineBlock(new BlockGenerator(networkConstants, activationConfig).getBlock(1));
 
         long start = System.currentTimeMillis();
         for (int i = 0; i < iterCnt; i++)
@@ -104,7 +118,7 @@ public class ProofOfWorkRuleTest {
 
     @Test
     public void test_noRSKTagInCoinbaseTransaction() {
-        BlockGenerator blockGenerator = new BlockGenerator();
+        BlockGenerator blockGenerator = new BlockGenerator(networkConstants, activationConfig);
 
         // mined block
         Block b = mineBlockWithCoinbaseTransactionWithCompressedCoinbaseTransactionPrefix(blockGenerator.getBlock(1), new byte[100]);
@@ -115,9 +129,9 @@ public class ProofOfWorkRuleTest {
     @Test
     public void test_RSKTagInCoinbaseTransactionTooFar() {
         /* This test is about a rsk block, with a compressed coinbase that leaves more than 64 bytes before the start of the RSK tag. */
-        BlockGenerator blockGenerator = new BlockGenerator();
+        BlockGenerator blockGenerator = new BlockGenerator(networkConstants, activationConfig);
         byte[] prefix = new byte[1000];
-        byte[] bytes = org.spongycastle.util.Arrays.concatenate(prefix, RskMiningConstants.RSK_TAG);
+        byte[] bytes = org.bouncycastle.util.Arrays.concatenate(prefix, RskMiningConstants.RSK_TAG);
 
         // mined block
         Block b = mineBlockWithCoinbaseTransactionWithCompressedCoinbaseTransactionPrefix(blockGenerator.getBlock(1), bytes);
@@ -125,7 +139,7 @@ public class ProofOfWorkRuleTest {
         Assert.assertFalse(rule.isValid(b));
     }
 
-    private static Block mineBlockWithCoinbaseTransactionWithCompressedCoinbaseTransactionPrefix(Block block, byte[] compressed) {
+    private Block mineBlockWithCoinbaseTransactionWithCompressedCoinbaseTransactionPrefix(Block block, byte[] compressed) {
         Keccak256 blockMergedMiningHash = new Keccak256(block.getHashForMergedMining());
 
         co.rsk.bitcoinj.core.NetworkParameters bitcoinNetworkParameters = co.rsk.bitcoinj.params.RegTestParams.get();
@@ -134,17 +148,20 @@ public class ProofOfWorkRuleTest {
 
         BigInteger targetBI = DifficultyUtils.difficultyToTarget(block.getDifficulty());
 
-        BlockMiner.findNonce(bitcoinMergedMiningBlock, targetBI);
+        new BlockMiner(activationConfig).findNonce(bitcoinMergedMiningBlock, targetBI);
 
-        // We need to clone to allow modifications
-        Block newBlock = new Block(block.getEncoded()).cloneBlock();
+        Block newBlock = blockFactory.cloneBlockForModification(block);
 
         newBlock.setBitcoinMergedMiningHeader(bitcoinMergedMiningBlock.cloneAsHeader().bitcoinSerialize());
 
-        co.rsk.bitcoinj.core.PartialMerkleTree bitcoinMergedMiningMerkleBranch = getBitcoinMergedMerkleBranch(bitcoinMergedMiningBlock);
+        byte[] merkleProof = MinerUtils.buildMerkleProof(
+                activationConfig,
+                pb -> pb.buildFromBlock(bitcoinMergedMiningBlock),
+                newBlock.getNumber()
+        );
 
-        newBlock.setBitcoinMergedMiningCoinbaseTransaction(org.spongycastle.util.Arrays.concatenate(compressed, blockMergedMiningHash.getBytes()));
-        newBlock.setBitcoinMergedMiningMerkleProof(bitcoinMergedMiningMerkleBranch.bitcoinSerialize());
+        newBlock.setBitcoinMergedMiningCoinbaseTransaction(org.bouncycastle.util.Arrays.concatenate(compressed, blockMergedMiningHash.getBytes()));
+        newBlock.setBitcoinMergedMiningMerkleProof(merkleProof);
 
         return newBlock;
     }

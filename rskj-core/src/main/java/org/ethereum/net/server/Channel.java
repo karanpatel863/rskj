@@ -19,14 +19,10 @@
 
 package org.ethereum.net.server;
 
-import co.rsk.config.RskSystemProperties;
 import co.rsk.net.NodeID;
+import co.rsk.net.eth.RskWireProtocol;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPipeline;
-import io.netty.handler.timeout.ReadTimeoutHandler;
-import org.ethereum.core.Block;
-import org.ethereum.core.Transaction;
 import org.ethereum.net.MessageQueue;
 import org.ethereum.net.NodeManager;
 import org.ethereum.net.NodeStatistics;
@@ -35,16 +31,15 @@ import org.ethereum.net.eth.EthVersion;
 import org.ethereum.net.eth.handler.Eth;
 import org.ethereum.net.eth.handler.EthAdapter;
 import org.ethereum.net.eth.handler.EthHandler;
-import org.ethereum.net.eth.handler.EthHandlerFactory;
 import org.ethereum.net.eth.message.Eth62MessageFactory;
 import org.ethereum.net.eth.message.EthMessage;
-import org.ethereum.net.message.MessageFactory;
 import org.ethereum.net.message.ReasonCode;
 import org.ethereum.net.message.StaticMessages;
 import org.ethereum.net.p2p.HelloMessage;
 import org.ethereum.net.p2p.P2pHandler;
-import org.ethereum.net.p2p.P2pMessageFactory;
-import org.ethereum.net.rlpx.*;
+import org.ethereum.net.rlpx.FrameCodec;
+import org.ethereum.net.rlpx.MessageCodec;
+import org.ethereum.net.rlpx.Node;
 import org.ethereum.sync.SyncStatistics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,20 +48,18 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 public class Channel {
 
     private static final Logger logger = LoggerFactory.getLogger("net");
 
-    private final RskSystemProperties config;
     private final MessageQueue msgQueue;
-    private final P2pHandler p2pHandler;
     private final MessageCodec messageCodec;
-    private final HandshakeHandler handshakeHandler;
     private final NodeManager nodeManager;
-    private final EthHandlerFactory ethHandlerFactory;
+    private final RskWireProtocol.Factory rskWireProtocolFactory;
+    private final Eth62MessageFactory eth62MessageFactory;
     private final StaticMessages staticMessages;
+    private final boolean isActive;
 
     private Eth eth = new EthAdapter();
 
@@ -75,76 +68,22 @@ public class Channel {
     private Node node;
     private NodeStatistics nodeStatistics;
 
-    private boolean discoveryMode;
-    private boolean isActive;
-
     private final PeerStatistics peerStats = new PeerStatistics();
 
-    public Channel(RskSystemProperties config,
-                   MessageQueue msgQueue,
-                   P2pHandler p2pHandler,
+    public Channel(MessageQueue msgQueue,
                    MessageCodec messageCodec,
-                   HandshakeHandler handshakeHandler,
                    NodeManager nodeManager,
-                   EthHandlerFactory ethHandlerFactory,
-                   StaticMessages staticMessages) {
-        this.config = config;
+                   RskWireProtocol.Factory rskWireProtocolFactory,
+                   Eth62MessageFactory eth62MessageFactory,
+                   StaticMessages staticMessages,
+                   String remoteId) {
         this.msgQueue = msgQueue;
-        this.p2pHandler = p2pHandler;
         this.messageCodec = messageCodec;
-        this.handshakeHandler = handshakeHandler;
         this.nodeManager = nodeManager;
-        this.ethHandlerFactory = ethHandlerFactory;
+        this.rskWireProtocolFactory = rskWireProtocolFactory;
+        this.eth62MessageFactory = eth62MessageFactory;
         this.staticMessages = staticMessages;
-    }
-
-    public void init(ChannelPipeline pipeline, String remoteId, boolean discoveryMode) {
-
-        isActive = remoteId != null && !remoteId.isEmpty();
-
-        pipeline.addLast("readTimeoutHandler",
-                new ReadTimeoutHandler(config.peerChannelReadTimeout(), TimeUnit.SECONDS));
-        pipeline.addLast("handshakeHandler", handshakeHandler);
-
-        this.discoveryMode = discoveryMode;
-
-        if (discoveryMode) {
-            // temporary key/nodeId to not accidentally smear our reputation with
-            // unexpected disconnect
-            handshakeHandler.generateTempKey();
-        }
-
-        handshakeHandler.setRemoteId(remoteId, this);
-
-        messageCodec.setChannel(this);
-
-        msgQueue.setChannel(this);
-
-        p2pHandler.setMsgQueue(msgQueue);
-        messageCodec.setP2pMessageFactory(new P2pMessageFactory());
-
-    }
-
-    public void publicRLPxHandshakeFinished(ChannelHandlerContext ctx, FrameCodec frameCodec,
-                                            HelloMessage helloRemote) throws IOException, InterruptedException {
-
-        logger.debug("publicRLPxHandshakeFinished with " + ctx.channel().remoteAddress());
-        if (P2pHandler.isProtocolVersionSupported(helloRemote.getP2PVersion())) {
-
-            if (helloRemote.getP2PVersion() < 5) {
-                messageCodec.setSupportChunkedFrames(false);
-            }
-
-            FrameCodecHandler frameCodecHandler = new FrameCodecHandler(frameCodec, this);
-            ctx.pipeline().addLast("medianFrameCodec", frameCodecHandler);
-            ctx.pipeline().addLast("messageCodec", messageCodec);
-            ctx.pipeline().addLast(Capability.P2P, p2pHandler);
-
-            p2pHandler.setChannel(this);
-            p2pHandler.setHandshake(helloRemote, ctx);
-
-            getNodeStatistics().rlpxHandshake.add();
-        }
+        this.isActive = remoteId != null && !remoteId.isEmpty();
     }
 
     public void sendHelloMessage(ChannelHandlerContext ctx, FrameCodec frameCodec, String nodeId,
@@ -152,8 +91,7 @@ public class Channel {
 
         // in discovery mode we are supplying fake port along with fake nodeID to not receive
         // incoming connections with fake public key
-        HelloMessage helloMessage = discoveryMode ? staticMessages.createHelloMessage(nodeId, 9) :
-                staticMessages.createHelloMessage(nodeId);
+        HelloMessage helloMessage = staticMessages.createHelloMessage(nodeId);
 
         if (inboundHelloMessage != null && P2pHandler.isProtocolVersionSupported(inboundHelloMessage.getP2PVersion())) {
             // the p2p version can be downgraded if requested by peer and supported by us
@@ -173,10 +111,13 @@ public class Channel {
     }
 
     public void activateEth(ChannelHandlerContext ctx, EthVersion version) {
-        EthHandler handler = ethHandlerFactory.create(version);
-        MessageFactory messageFactory = createEthMessageFactory(version);
+        if (version != EthVersion.V62) {
+            throw new IllegalArgumentException(String.format("Eth version %s is not supported", version));
+        }
+
+        EthHandler handler = rskWireProtocolFactory.newInstance();
         messageCodec.setEthVersion(version);
-        messageCodec.setEthMessageFactory(messageFactory);
+        messageCodec.setEthMessageFactory(eth62MessageFactory);
 
         logger.info("Eth{} [ address = {} | id = {} ]", handler.getVersion(), inetSocketAddress, getPeerIdShort());
 
@@ -184,18 +125,10 @@ public class Channel {
 
         handler.setMsgQueue(msgQueue);
         handler.setChannel(this);
-        handler.setPeerDiscoveryMode(discoveryMode);
 
         handler.activate();
 
         eth = handler;
-    }
-
-    private MessageFactory createEthMessageFactory(EthVersion version) {
-        switch (version) {
-            case V62:   return new Eth62MessageFactory(config);
-            default:    throw new IllegalArgumentException("Eth " + version + " is not supported");
-        }
     }
 
     public void setInetSocketAddress(InetSocketAddress inetSocketAddress) {
@@ -241,10 +174,6 @@ public class Channel {
         eth.onSyncDone(done);
     }
 
-    public boolean isDiscoveryMode() {
-        return discoveryMode;
-    }
-
     public String getPeerId() {
         return node == null ? "<null>" : node.getHexId();
     }
@@ -278,20 +207,8 @@ public class Channel {
 
     // RSK sub protocol
 
-    public boolean isEthCompatible(Channel peer) {
-        return peer != null && peer.getEthVersion().isCompatible(getEthVersion());
-    }
-
-    public Eth getEthHandler() {
-        return eth;
-    }
-
     public boolean hasEthStatusSucceeded() {
         return eth.hasStatusSucceeded();
-    }
-
-    public void logSyncStats() {
-        eth.logSyncStats();
     }
 
     public BigInteger getTotalDifficulty() {
@@ -302,36 +219,8 @@ public class Channel {
         return eth.getStats();
     }
 
-    public boolean isHashRetrievingDone() {
-        return eth.isHashRetrievingDone();
-    }
-
-    public boolean isHashRetrieving() {
-        return eth.isHashRetrieving();
-    }
-
-    public boolean isMaster() {
-        return eth.isHashRetrieving() || eth.isHashRetrievingDone();
-    }
-
     public boolean isIdle() {
         return eth.isIdle();
-    }
-
-    public void prohibitTransactionProcessing() {
-        eth.disableTransactions();
-    }
-
-    public void sendTransaction(List<Transaction> tx) {
-        eth.sendTransaction(tx);
-    }
-
-    public void sendNewBlock(Block block) {
-        eth.sendNewBlock(block);
-    }
-
-    public EthVersion getEthVersion() {
-        return eth.getVersion();
     }
 
     public void dropConnection() {

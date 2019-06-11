@@ -26,7 +26,7 @@ import org.ethereum.datasource.HashMapDB;
 import org.ethereum.vm.LogInfo;
 import org.junit.Assert;
 import org.junit.Test;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -288,7 +288,7 @@ public class ReceiptStoreImplTest {
         // TODO calculate cumulative gas
         TransactionReceipt receipt = new TransactionReceipt(stateRoot, gasUsed, gasUsed, bloom, logs, new byte[]{0x01});
 
-        receipt.setTransaction(new Transaction(null, null, null, null, null, null));
+        receipt.setTransaction(new Transaction((byte[]) null, null, null, null, null, null));
 
         return receipt;
     }

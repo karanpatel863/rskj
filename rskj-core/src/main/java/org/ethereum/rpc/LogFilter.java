@@ -19,6 +19,8 @@
 package org.ethereum.rpc;
 
 import co.rsk.core.RskAddress;
+import co.rsk.logfilter.BlocksBloom;
+import co.rsk.logfilter.BlocksBloomStore;
 import org.ethereum.core.*;
 import org.ethereum.db.TransactionInfo;
 import org.ethereum.vm.LogInfo;
@@ -102,11 +104,14 @@ public class LogFilter extends Filter {
         //empty method
     }
 
-    public static LogFilter fromFilterRequest(Web3.FilterRequest fr, Blockchain blockchain) throws Exception {
+    public static LogFilter fromFilterRequest(Web3.FilterRequest fr, Blockchain blockchain, BlocksBloomStore blocksBloomStore) throws Exception {
         RskAddress[] addresses;
 
-        // TODO get array of topics, with topics, and array of topics inside (the OR operation over topics)
-        Topic[] topics = null;
+        // Now, there is an array of array of topics
+        // first level are topic filters by position
+        // second level contains OR topic filters for that position
+        // null value matches anything
+        Topic[][] topics;
 
         if (fr.address instanceof String) {
             addresses = new RskAddress[] { new RskAddress(stringHexToByteArray((String) fr.address)) };
@@ -125,15 +130,21 @@ public class LogFilter extends Filter {
         }
 
         if (fr.topics != null) {
-            for (Object topic : fr.topics) {
+            topics = new Topic[fr.topics.length][];
+
+            for (int nt = 0; nt < fr.topics.length; nt++) {
+                Object topic = fr.topics[nt];
+
                 if (topic == null) {
-                    topics = new Topic[0];
+                    topics[nt] = new Topic[0];
                 } else if (topic instanceof String) {
-                    topics = new Topic[] { new Topic((String) topic) };
+                    topics[nt] = new Topic[] { new Topic((String) topic) };
                 } else if (topic instanceof Collection<?>) {
+                    // TODO list of topics as topic with OR logic
+
                     Collection<?> iterable = (Collection<?>)topic;
 
-                    topics = iterable.stream()
+                    topics[nt] = iterable.stream()
                             .filter(String.class::isInstance)
                             .map(String.class::cast)
                             .map(TypeConverter::stringHexToByteArray)
@@ -166,12 +177,12 @@ public class LogFilter extends Filter {
 
         LogFilter filter = new LogFilter(addressesTopicsFilter, blockchain, fromLatestBlock, toLatestBlock);
 
-        retrieveHistoricalData(fr, blockchain, filter);
+        retrieveHistoricalData(fr, blockchain, filter, blocksBloomStore);
 
         return filter;
     }
 
-    private static void retrieveHistoricalData(Web3.FilterRequest fr, Blockchain blockchain, LogFilter filter) throws Exception {
+    private static void retrieveHistoricalData(Web3.FilterRequest fr, Blockchain blockchain, LogFilter filter, BlocksBloomStore blocksBloomStore) throws Exception {
         Block blockFrom = isBlockWord(fr.fromBlock) ? null : Web3Impl.getBlockByNumberOrStr(fr.fromBlock, blockchain);
         Block blockTo = isBlockWord(fr.toBlock) ? null : Web3Impl.getBlockByNumberOrStr(fr.toBlock, blockchain);
 
@@ -183,12 +194,49 @@ public class LogFilter extends Filter {
             // need to add historical data
             blockTo = blockTo == null ? blockchain.getBestBlock() : blockTo;
 
-            for (long blockNum = blockFrom.getNumber(); blockNum <= blockTo.getNumber(); blockNum++) {
-                filter.onBlock(blockchain.getBlockByNumber(blockNum));
-            }
+            processBlocks(blockFrom.getNumber(), blockTo.getNumber(), filter, blockchain, blocksBloomStore);
         }
         else if ("latest".equalsIgnoreCase(fr.fromBlock)) {
             filter.onBlock(blockchain.getBestBlock());
+        }
+    }
+
+    private static void processBlocks(long fromBlockNumber, long toBlockNumber, LogFilter filter, Blockchain blockchain, BlocksBloomStore blocksBloomStore) {
+        BlocksBloom auxiliaryBlocksBloom = null;
+        long bestBlockNumber = blockchain.getBestBlock().getNumber();
+
+        for (long blockNum = fromBlockNumber; blockNum <= toBlockNumber; blockNum++) {
+            boolean isConfirmedBlock = blockNum <= bestBlockNumber - blocksBloomStore.getNoConfirmations();
+
+            if (isConfirmedBlock) {
+                if (blocksBloomStore.firstNumberInRange(blockNum) == blockNum) {
+                    if (blocksBloomStore.hasBlockNumber(blockNum)) {
+                        BlocksBloom blocksBloom = blocksBloomStore.getBlocksBloomByNumber(blockNum);
+
+                        if (!filter.addressesTopicsFilter.matchBloom(blocksBloom.getBloom())) {
+                            blockNum = blocksBloomStore.lastNumberInRange(blockNum);
+                            continue;
+                        }
+                    }
+
+                    auxiliaryBlocksBloom = new BlocksBloom();
+                }
+
+                Block block = blockchain.getBlockByNumber(blockNum);
+
+                if (auxiliaryBlocksBloom != null) {
+                    auxiliaryBlocksBloom.addBlockBloom(blockNum, new Bloom(block.getLogBloom()));
+                }
+
+                if (auxiliaryBlocksBloom != null && blocksBloomStore.lastNumberInRange(blockNum) == blockNum) {
+                    blocksBloomStore.setBlocksBloom(auxiliaryBlocksBloom);
+                }
+
+                filter.onBlock(block);
+            }
+            else {
+                filter.onBlock(blockchain.getBlockByNumber(blockNum));
+            }
         }
     }
 

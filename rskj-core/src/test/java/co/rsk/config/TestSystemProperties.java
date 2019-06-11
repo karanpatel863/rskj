@@ -23,6 +23,7 @@ import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 
 public class TestSystemProperties extends RskSystemProperties {
+
     private static final ConfigLoader TEST_LOADER = new ConfigLoader(CliArgs.empty()) {
         /**
          * Cache configurations that don't change so we don't read files multiple times.

@@ -8,8 +8,8 @@ import com.google.common.collect.Lists;
 import org.ethereum.crypto.HashUtil;
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPList;
-import org.spongycastle.pqc.math.linearalgebra.ByteUtils;
-import org.spongycastle.util.BigIntegers;
+import org.bouncycastle.pqc.math.linearalgebra.ByteUtils;
+import org.bouncycastle.util.BigIntegers;
 
 import java.math.BigInteger;
 import java.util.List;
@@ -67,7 +67,7 @@ public class FreeBlockHeader {
     * With the exception of the genesis block, this must be 32 bytes or fewer */
     private byte[] extraData;
 
-    /* The 81-byte bitcoin block header for merged mining */
+    /* The 80-byte bitcoin block header for merged mining */
     private byte[] bitcoinMergedMiningHeader;
     /* The bitcoin merkle proof of coinbase tx for merged mining */
     private byte[] bitcoinMergedMiningMerkleProof;

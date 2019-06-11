@@ -20,7 +20,7 @@
 package org.ethereum.core;
 
 import org.ethereum.util.ByteUtil;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.util.Arrays;
 
@@ -32,13 +32,13 @@ import java.util.Arrays;
  */
 
 public class Bloom {
+    public static final int BLOOM_BYTES = 256;
 
     static final int _8STEPS = 8;
     static final int _3LOW_BITS = 7;
     static final int ENSURE_BYTE = 255;
 
-    byte[] data = new byte[256];
-
+    private byte[] data = new byte[BLOOM_BYTES];
 
     public Bloom() {
     }

@@ -22,13 +22,7 @@ import co.rsk.core.Coin;
 import co.rsk.core.RskAddress;
 import org.ethereum.core.Repository;
 import org.ethereum.util.RLP;
-import org.ethereum.util.RLPList;
 import org.ethereum.vm.DataWord;
-import org.spongycastle.util.BigIntegers;
-
-import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
-import java.util.*;
 
 /**
  * Responsible for persisting the remasc state into the contract state
@@ -41,6 +35,7 @@ class RemascStorageProvider {
     private static final String BURNED_BALANCE_KEY = "burnedBalance";
     private static final String SIBLINGS_KEY = "siblings";
     private static final String BROKEN_SELECTION_RULE_KEY = "brokenSelectionRule";
+    private static final String FEDERATION_BALANCE_KEY = "federationBalance";
 
     private Repository repository;
     private RskAddress contractAddress;
@@ -48,7 +43,7 @@ class RemascStorageProvider {
     // Values retrieved / to be stored on the contract state
     private Coin rewardBalance;
     private Coin burnedBalance;
-    private SortedMap<Long, List<Sibling>> siblings;
+    private Coin federationBalance;
     private Boolean brokenSelectionRule;
 
     public RemascStorageProvider(Repository repository, RskAddress contractAddress) {
@@ -56,12 +51,12 @@ class RemascStorageProvider {
         this.contractAddress = contractAddress;
     }
 
-    public Coin getRewardBalance() {
-        if (rewardBalance != null) {
-            return rewardBalance;
+    public Coin getFederationBalance() {
+        if (federationBalance != null) {
+            return federationBalance ;
         }
 
-        DataWord address = new DataWord(REWARD_BALANCE_KEY.getBytes(StandardCharsets.UTF_8));
+        DataWord address = DataWord.fromString(FEDERATION_BALANCE_KEY);
 
         DataWord value = this.repository.getStorageValue(this.contractAddress, address);
 
@@ -70,6 +65,38 @@ class RemascStorageProvider {
         }
 
         return new Coin(value.getData());
+    }
+
+
+    public Coin getRewardBalance() {
+        if (rewardBalance != null) {
+            return rewardBalance;
+        }
+
+        DataWord address = DataWord.fromString(REWARD_BALANCE_KEY);
+
+        DataWord value = this.repository.getStorageValue(this.contractAddress, address);
+
+        if (value == null) {
+            return Coin.ZERO;
+        }
+
+        return new Coin(value.getData());
+    }
+
+
+    public void setFederationBalance(Coin federationBalance) {
+        this.federationBalance = federationBalance;
+    }
+
+    private void saveFederationBalance() {
+        if (federationBalance == null) {
+            return;
+        }
+
+        DataWord address = DataWord.fromString(FEDERATION_BALANCE_KEY);
+
+        this.repository.addStorageRow(this.contractAddress, address, DataWord.valueOf(this.federationBalance.getBytes()));
     }
 
     public void setRewardBalance(Coin rewardBalance) {
@@ -81,9 +108,9 @@ class RemascStorageProvider {
             return;
         }
 
-        DataWord address = new DataWord(REWARD_BALANCE_KEY.getBytes(StandardCharsets.UTF_8));
+        DataWord address = DataWord.fromString(REWARD_BALANCE_KEY);
 
-        this.repository.addStorageRow(this.contractAddress, address, new DataWord(this.rewardBalance.getBytes()));
+        this.repository.addStorageRow(this.contractAddress, address, DataWord.valueOf(this.rewardBalance.getBytes()));
     }
 
     public Coin getBurnedBalance() {
@@ -91,7 +118,7 @@ class RemascStorageProvider {
             return burnedBalance;
         }
 
-        DataWord address = new DataWord(BURNED_BALANCE_KEY.getBytes(StandardCharsets.UTF_8));
+        DataWord address = DataWord.fromString(BURNED_BALANCE_KEY);
 
         DataWord value = this.repository.getStorageValue(this.contractAddress, address);
 
@@ -115,100 +142,16 @@ class RemascStorageProvider {
             return;
         }
 
-        DataWord address = new DataWord(BURNED_BALANCE_KEY.getBytes(StandardCharsets.UTF_8));
+        DataWord address = DataWord.fromString(BURNED_BALANCE_KEY);
 
-        this.repository.addStorageRow(this.contractAddress, address, new DataWord(this.burnedBalance.getBytes()));
-    }
-
-    public SortedMap<Long, List<Sibling>> getSiblings() {
-        if (siblings != null) {
-            return siblings;
-        }
-
-        DataWord address = new DataWord(SIBLINGS_KEY.getBytes(StandardCharsets.UTF_8));
-
-        byte[] bytes = this.repository.getStorageBytes(this.contractAddress, address);
-
-        siblings = getSiblingsFromBytes(bytes);
-
-        return siblings;
-    }
-
-    public static SortedMap<Long, List<Sibling>> getSiblingsFromBytes(byte[] bytes) {
-        SortedMap<Long, List<Sibling>> siblings = new TreeMap<>();
-
-        if (bytes == null || bytes.length == 0) {
-            return siblings;
-        }
-
-        RLPList rlpList = (RLPList) RLP.decode2(bytes).get(0);
-
-        int nentries = rlpList.size() / 2;
-
-        for (int k = 0; k < nentries; k++) {
-            byte[] bytesKey = rlpList.get(k * 2).getRLPData();
-            byte[] bytesValue = rlpList.get(k * 2 + 1).getRLPData();
-
-            long longKey = bytesKey == null ? 0 : BigIntegers.fromUnsignedByteArray(bytesKey).longValue();
-
-            Long key = Long.valueOf(longKey);
-
-            RLPList rlpSiblingList = (RLPList) RLP.decode2(bytesValue).get(0);
-
-            int nsiblings = rlpSiblingList.size();
-
-            List<Sibling> list = new ArrayList<>();
-
-            for (int j = 0; j < nsiblings; j++) {
-                byte[] bytesSibling = rlpSiblingList.get(j).getRLPData();
-                Sibling sibling = Sibling.create(bytesSibling);
-                list.add(sibling);
-            }
-
-            siblings.put(key, list);
-        }
-
-        return siblings;
+        this.repository.addStorageRow(this.contractAddress, address, DataWord.valueOf(this.burnedBalance.getBytes()));
     }
 
     private void saveSiblings() {
-        if (this.siblings == null) {
-            return;
-        }
+        DataWord address = DataWord.fromString(SIBLINGS_KEY);
 
-        byte[] bytes = getSiblingsBytes(this.siblings);
-
-        DataWord address = new DataWord(SIBLINGS_KEY.getBytes(StandardCharsets.UTF_8));
-
-        this.repository.addStorageBytes(this.contractAddress, address, bytes);
-    }
-
-    public static byte[] getSiblingsBytes(SortedMap<Long, List<Sibling>> siblings) {
-        int nentries = siblings.size();
-
-        byte[][] entriesBytes = new byte[nentries * 2][];
-
-        int n = 0;
-
-        for (Map.Entry<Long, List<Sibling>> entry : siblings.entrySet()) {
-            entriesBytes[n++] = RLP.encodeBigInteger(BigInteger.valueOf(entry.getKey()));
-
-            List<Sibling> list = entry.getValue();
-
-            int nsiblings = list.size();
-
-            byte[][] siblingsBytes = new byte[nsiblings][];
-
-            int j = 0;
-
-            for (Sibling element : list) {
-                siblingsBytes[j++] = element.getEncoded();
-            }
-
-            entriesBytes[n++] = RLP.encodeList(siblingsBytes);
-        }
-
-        return RLP.encodeList(entriesBytes);
+        // we add an empty list because Remasc state expects to have an empty siblings list after 0.5.0 activation
+        this.repository.addStorageBytes(this.contractAddress, address, RLP.encodedEmptyList());
     }
 
     public Boolean getBrokenSelectionRule() {
@@ -216,7 +159,7 @@ class RemascStorageProvider {
             return brokenSelectionRule;
         }
 
-        DataWord address = new DataWord(BROKEN_SELECTION_RULE_KEY.getBytes(StandardCharsets.UTF_8));
+        DataWord address = DataWord.fromString(BROKEN_SELECTION_RULE_KEY);
 
         byte[] bytes = this.repository.getStorageBytes(this.contractAddress, address);
 
@@ -240,7 +183,7 @@ class RemascStorageProvider {
             return;
         }
 
-        DataWord address = new DataWord(BROKEN_SELECTION_RULE_KEY.getBytes(StandardCharsets.UTF_8));
+        DataWord address = DataWord.fromString(BROKEN_SELECTION_RULE_KEY);
 
         byte[] bytes = new byte[1];
 
@@ -255,7 +198,9 @@ class RemascStorageProvider {
     public void save() {
         saveRewardBalance();
         saveBurnedBalance();
+        // This could be done only once because it will never change
         saveSiblings();
         saveBrokenSelectionRule();
+        saveFederationBalance();
     }
 }

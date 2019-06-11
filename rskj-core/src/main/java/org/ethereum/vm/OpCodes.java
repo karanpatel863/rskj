@@ -130,6 +130,19 @@ public class OpCodes {
      */
     static final byte OP_BYTE =0x1a ;
 
+    /**
+     * (0x1b) Bitwise SHIFT LEFT operation
+     */
+    public static final byte OP_SHL =0x1b ;
+    /**
+     * (0x1c) Bitwise SHIFT RIGHT operation
+     */
+    public static final byte OP_SHR =0x1c ;
+    /**
+     * (0x1d) Bitwise ARITHMETIC SHIFT RIGHT operation
+     */
+    public static final byte OP_SAR =0x1d ;
+
     /*  Cryptographic Operations    */
 
     /**
@@ -601,6 +614,21 @@ public class OpCodes {
      *  also the Value parameter is omitted for this opcode
      */
     static final byte OP_DELEGATECALL =(byte)0xf4 ;
+
+    /**
+     * (0xf5) Skinny CREATE2, same as CREATE but with deterministic address
+     */
+    public static final byte OP_CREATE2 =(byte)0xf5;
+
+    /**
+     *  opcode that can be used to call another contract (or itself) while disallowing any
+     *  modifications to the state during the call (and its subcalls, if present).
+     *  Any opcode that attempts to perform such a modification (see below for details)
+     *  will result in an exception instead of performing the modification.
+     */
+    static final byte OP_STATICCALL =(byte)0xfa ;
+
+
     static final byte OP_HEADER =(byte)0xfc  ;
 
     /**

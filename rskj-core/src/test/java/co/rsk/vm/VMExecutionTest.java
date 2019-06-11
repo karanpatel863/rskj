@@ -20,24 +20,27 @@ package co.rsk.vm;
 
 import co.rsk.config.TestSystemProperties;
 import co.rsk.config.VmConfig;
-import org.ethereum.config.BlockchainConfig;
+import org.bouncycastle.util.encoders.Hex;
+import org.ethereum.config.blockchain.upgrades.ActivationConfig;
+import org.ethereum.core.BlockFactory;
 import org.ethereum.vm.DataWord;
 import org.ethereum.vm.PrecompiledContracts;
 import org.ethereum.vm.VM;
 import org.ethereum.vm.program.Program;
 import org.ethereum.vm.program.Stack;
 import org.ethereum.vm.program.invoke.ProgramInvokeMockImpl;
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
-import org.spongycastle.util.encoders.Hex;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
+import java.util.HashSet;
 
+import static org.ethereum.config.blockchain.upgrades.ConsensusRule.RSKIP120;
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Created by ajlopez on 25/01/2017.
@@ -46,6 +49,7 @@ public class VMExecutionTest {
     private final TestSystemProperties config = new TestSystemProperties();
     private final VmConfig vmConfig = config.getVmConfig();
     private final PrecompiledContracts precompiledContracts = new PrecompiledContracts(config);
+    private final BlockFactory blockFactory = new BlockFactory(config.getActivationConfig());
     private ProgramInvokeMockImpl invoke;
     private BytecodeCompiler compiler;
 
@@ -55,45 +59,361 @@ public class VMExecutionTest {
         compiler = new BytecodeCompiler();
     }
 
-    @After
-    public void tearDown() {
-        invoke.getRepository().close();
-    }
-
     @Test
     public void testPush1() {
         Program program = executeCode("PUSH1 0xa0", 1);
         Stack stack = program.getStack();
 
         Assert.assertEquals(1, stack.size());
-        Assert.assertEquals(new DataWord(0xa0), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(0xa0), stack.peek());
     }
 
     @Test
     public void testAdd() {
-        Program program = executeCode("PUSH1 1 PUSH1 2 ADD", 3);
+        Program program = executeCode("PUSH1 0x01 PUSH1 0x02 ADD", 3);
         Stack stack = program.getStack();
 
         Assert.assertEquals(1, stack.size());
-        Assert.assertEquals(new DataWord(3), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(3), stack.peek());
     }
 
     @Test
     public void testMul() {
-        Program program = executeCode("PUSH1 3 PUSH1 2 MUL", 3);
+        Program program = executeCode("PUSH1 0x03 PUSH1 0x02 MUL", 3);
         Stack stack = program.getStack();
 
         Assert.assertEquals(1, stack.size());
-        Assert.assertEquals(new DataWord(6), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(6), stack.peek());
     }
 
     @Test
     public void testSub() {
-        Program program = executeCode("PUSH1 1 PUSH1 2 SUB", 3);
+        Program program = executeCode("PUSH1 0x01 PUSH1 0x02 SUB", 3);
         Stack stack = program.getStack();
 
         Assert.assertEquals(1, stack.size());
-        Assert.assertEquals(new DataWord(1), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(1), stack.peek());
+    }
+
+
+    private void executeShift(String number, String shiftAmount, String expect, String op , ActivationConfig.ForBlock activations){
+        Program program = executeCodeWithActivationConfig("PUSH32 "+number+" PUSH1 "+shiftAmount+" "+op, 3, activations);
+        Stack stack = program.getStack();
+
+        Assert.assertEquals(1, stack.size());
+        Assert.assertEquals(DataWord.valueFromHex(expect), stack.peek());
+    }
+
+    @Test
+    public void testSHL1() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x00",
+                "0000000000000000000000000000000000000000000000000000000000000001",
+                "SHL",
+                activations);
+    }
+
+
+    @Test
+    public void testSHL2() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x01",
+                "0000000000000000000000000000000000000000000000000000000000000002",
+                "SHL",
+                activations);
+    }
+
+    @Test
+    public void testSHL3() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0xff",
+                "8000000000000000000000000000000000000000000000000000000000000000",
+                "SHL",
+                activations);
+    }
+
+    @Test
+    public void testSHL4() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        String number = "0x0000000000000000000000000000000000000000000000000000000000000001";
+        String shiftAmount = "0x0100";
+        String op = "SHL";
+        String expect = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        Program program = executeCodeWithActivationConfig("PUSH32 "+number+" PUSH2 "+shiftAmount+" "+op, 3, activations);
+        Stack stack = program.getStack();
+
+        Assert.assertEquals(1, stack.size());
+        Assert.assertEquals(DataWord.valueFromHex(expect), stack.peek());
+    }
+
+    @Test
+    public void testSHL5() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "0x00",
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "SHL",
+                activations);
+    }
+
+    @Test
+    public void testSHL6() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "0xff",
+                "8000000000000000000000000000000000000000000000000000000000000000",
+                "SHL",
+                activations);
+    }
+
+    @Test
+    public void testSHL7() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "0x01",
+                "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe",
+                "SHL",
+                activations);
+    }
+
+    @Test
+    public void testSHR1() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x00",
+                "0000000000000000000000000000000000000000000000000000000000000001",
+                "SHR",
+                activations);
+    }
+
+    @Test
+    public void testSHR2() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x01",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "SHR",
+                activations);
+    }
+
+    @Test
+    public void testSHR3() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x8000000000000000000000000000000000000000000000000000000000000000",
+                "0x01",
+                "4000000000000000000000000000000000000000000000000000000000000000",
+                "SHR",
+                activations);
+    }
+
+    @Test
+    public void testSHR4() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x8000000000000000000000000000000000000000000000000000000000000000",
+                "0xff",
+                "0000000000000000000000000000000000000000000000000000000000000001",
+                "SHR",
+                activations);
+    }
+
+
+    @Test
+    public void testSHR5() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "0x00",
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "SHR",
+                activations);
+    }
+
+    @Test
+    public void testSHR6() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "0xff",
+                "0000000000000000000000000000000000000000000000000000000000000001",
+                "SHR",
+                activations);
+    }
+
+    @Test
+    public void testSHR7() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        String number = "0x8000000000000000000000000000000000000000000000000000000000000000";
+        String shiftAmount = "0x0100";
+        String op = "SHR";
+        String expect = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        Program program = executeCodeWithActivationConfig("PUSH32 "+number+" PUSH2 "+shiftAmount+" "+op, 3, activations);
+        Stack stack = program.getStack();
+
+        Assert.assertEquals(1, stack.size());
+        Assert.assertEquals(DataWord.valueFromHex(expect), stack.peek());
+    }
+
+    @Test
+    public void testSAR1() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x00",
+                "0000000000000000000000000000000000000000000000000000000000000001",
+                "SAR",
+                activations);
+    }
+
+
+    @Test
+    public void testSAR2() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x01",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "SAR",
+                activations);
+    }
+
+
+    @Test
+    public void testSAR3() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x8000000000000000000000000000000000000000000000000000000000000000",
+                "0x01",
+                "c000000000000000000000000000000000000000000000000000000000000000",
+                "SAR",
+                activations);
+    }
+
+
+    @Test
+    public void testSAR4() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x8000000000000000000000000000000000000000000000000000000000000000",
+                "0xff",
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "SAR",
+                activations);
+    }
+
+
+    @Test
+    public void testSAR5() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "0x00",
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "SAR",
+                activations);
+    }
+
+
+    @Test
+    public void testSAR6() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "0x01",
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "SAR",
+                activations);
+    }
+
+
+    @Test
+    public void testSAR7() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        executeShift("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "0xf8",
+                "000000000000000000000000000000000000000000000000000000000000007f",
+                "SAR",
+                activations);
+    }
+
+    @Test
+    public void testSAR8() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(true);
+
+        String number = "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        String shiftAmount = "0x0100";
+        String op = "SAR";
+        String expect = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        Program program = executeCodeWithActivationConfig("PUSH32 "+number+" PUSH2 "+shiftAmount+" "+op, 3, activations);
+        Stack stack = program.getStack();
+
+        Assert.assertEquals(1, stack.size());
+        Assert.assertEquals(DataWord.valueFromHex(expect), stack.peek());
+    }
+
+
+
+    @Test(expected = Program.IllegalOperationException.class)
+    public void testSAR3ShouldFailOnOldVersion() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(false);
+        executeCodeWithActivationConfig("PUSH32 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff PUSH1 0xff SAR", 3, activations);
+    }
+
+    @Test(expected = Program.IllegalOperationException.class)
+    public void testSHL1ShouldFailOnOldVersion() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(false);
+
+        executeCodeWithActivationConfig("PUSH32 0x0000000000000000000000000000000000000000000000000000000000000001 PUSH1 0x01 SHL", 3, activations);
+    }
+
+    @Test(expected = Program.IllegalOperationException.class)
+    public void testSHR1ShouldFailOnOldVersion() {
+        ActivationConfig.ForBlock activations = mock(ActivationConfig.ForBlock.class);
+        when(activations.isActive(RSKIP120)).thenReturn(false);
+
+        executeCodeWithActivationConfig("PUSH32 0x0000000000000000000000000000000000000000000000000000000000000001 PUSH1 0x01 SHR", 3, activations);
     }
 
     @Test
@@ -102,7 +422,7 @@ public class VMExecutionTest {
         Stack stack = program.getStack();
 
         Assert.assertEquals(1, stack.size());
-        Assert.assertEquals(new DataWord(1), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(1), stack.peek());
     }
 
     @Test
@@ -111,8 +431,8 @@ public class VMExecutionTest {
         Stack stack = program.getStack();
 
         Assert.assertEquals(2, stack.size());
-        Assert.assertEquals(new DataWord(1), stack.peek());
-        Assert.assertEquals(new DataWord(1), stack.get(0));
+        Assert.assertEquals(DataWord.valueOf(1), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(1), stack.get(0));
     }
 
     @Test
@@ -121,10 +441,10 @@ public class VMExecutionTest {
         Stack stack = program.getStack();
 
         Assert.assertEquals(5, stack.size());
-        Assert.assertEquals(new DataWord(1), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(1), stack.peek());
 
         for (int k = 0; k < 4; k++)
-            Assert.assertEquals(new DataWord(k + 1), stack.get(k));
+            Assert.assertEquals(DataWord.valueOf(k + 1), stack.get(k));
     }
 
     @Test
@@ -133,10 +453,10 @@ public class VMExecutionTest {
         Stack stack = program.getStack();
 
         Assert.assertEquals(21, stack.size());
-        Assert.assertEquals(new DataWord(1), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(1), stack.peek());
 
         for (int k = 0; k < 20; k++)
-            Assert.assertEquals(new DataWord(k + 1), stack.get(k));
+            Assert.assertEquals(DataWord.valueOf(k + 1), stack.get(k));
     }
 
     @Test(expected = Program.StackTooSmallException.class)
@@ -155,8 +475,8 @@ public class VMExecutionTest {
         Stack stack = program.getStack();
 
         Assert.assertEquals(2, stack.size());
-        Assert.assertEquals(new DataWord(1), stack.peek());
-        Assert.assertEquals(new DataWord(2), stack.get(0));
+        Assert.assertEquals(DataWord.valueOf(1), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(2), stack.get(0));
     }
 
     @Test
@@ -165,10 +485,10 @@ public class VMExecutionTest {
         Stack stack = program.getStack();
 
         Assert.assertEquals(4, stack.size());
-        Assert.assertEquals(new DataWord(1), stack.peek());
-        Assert.assertEquals(new DataWord(4), stack.get(0));
-        Assert.assertEquals(new DataWord(2), stack.get(1));
-        Assert.assertEquals(new DataWord(3), stack.get(2));
+        Assert.assertEquals(DataWord.valueOf(1), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(4), stack.get(0));
+        Assert.assertEquals(DataWord.valueOf(2), stack.get(1));
+        Assert.assertEquals(DataWord.valueOf(3), stack.get(2));
     }
 
     @Test
@@ -177,11 +497,11 @@ public class VMExecutionTest {
         Stack stack = program.getStack();
 
         Assert.assertEquals(20, stack.size());
-        Assert.assertEquals(new DataWord(1), stack.peek());
-        Assert.assertEquals(new DataWord(20), stack.get(0));
+        Assert.assertEquals(DataWord.valueOf(1), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(20), stack.get(0));
 
         for (int k = 1; k < 19; k++)
-            Assert.assertEquals(new DataWord(k + 1), stack.get(k));
+            Assert.assertEquals(DataWord.valueOf(k + 1), stack.get(k));
     }
 
     @Test(expected = Program.StackTooSmallException.class)
@@ -196,12 +516,12 @@ public class VMExecutionTest {
 
     @Test
     public void txindexExecution() {
-        invoke.setTransactionIndex(new DataWord(42));
+        invoke.setTransactionIndex(DataWord.valueOf(42));
         Program program = executeCode("TXINDEX", 1);
         Stack stack = program.getStack();
 
         Assert.assertEquals(1, stack.size());
-        Assert.assertEquals(new DataWord(42), stack.peek());
+        Assert.assertEquals(DataWord.valueOf(42), stack.peek());
     }
 
     @Test
@@ -251,7 +571,7 @@ public class VMExecutionTest {
     @Test
     public void dupnArgumentIsNotJumpdest() {
         byte[] code = compiler.compile("JUMPDEST DUPN 0x5b 0x5b");
-        Program program = new Program(vmConfig, precompiledContracts, mock(BlockchainConfig.class), code, invoke, null);
+        Program program = new Program(vmConfig, precompiledContracts, blockFactory, mock(ActivationConfig.ForBlock.class), code, invoke, null, new HashSet<>());
 
         BitSet jumpdestSet = program.getJumpdestSet();
 
@@ -266,7 +586,7 @@ public class VMExecutionTest {
     @Test
     public void swapnArgumentIsNotJumpdest() {
         byte[] code = compiler.compile("JUMPDEST SWAPN 0x5b 0x5b");
-        Program program = new Program(vmConfig, precompiledContracts, mock(BlockchainConfig.class), code, invoke, null);
+        Program program = new Program(vmConfig, precompiledContracts, blockFactory, mock(ActivationConfig.ForBlock.class), code, invoke, null, new HashSet<>());
 
         BitSet jumpdestSet = program.getJumpdestSet();
 
@@ -353,22 +673,26 @@ public class VMExecutionTest {
     }
 
     private Program executeCode(String code, int nsteps) {
-        return executeCode(compiler.compile(code), nsteps);
+        return executeCodeWithActivationConfig(compiler.compile(code), nsteps, mock(ActivationConfig.ForBlock.class));
     }
 
     private void testCode(byte[] code, int nsteps, String expected) {
-        Program program = executeCode(code, nsteps);
+        Program program = executeCodeWithActivationConfig(code, nsteps, mock(ActivationConfig.ForBlock.class));
 
         assertEquals(expected, Hex.toHexString(program.getStack().peek().getData()).toUpperCase());
     }
 
-    private Program executeCode(byte[] code, int nsteps) {
+    private Program executeCodeWithActivationConfig(String code, int nsteps, ActivationConfig.ForBlock activations) {
+        return executeCodeWithActivationConfig(compiler.compile(code), nsteps, activations);
+    }
+
+    private Program executeCodeWithActivationConfig(byte[] code, int nsteps, ActivationConfig.ForBlock activations) {
         VM vm = new VM(vmConfig, precompiledContracts);
+        Program program = new Program(vmConfig, precompiledContracts, blockFactory, activations, code, invoke,null, new HashSet<>());
 
-        Program program = new Program(vmConfig, precompiledContracts, mock(BlockchainConfig.class), code, invoke, null);
-
-        for (int k = 0; k < nsteps; k++)
+        for (int k = 0; k < nsteps; k++) {
             vm.step(program);
+        }
 
         return program;
     }

@@ -19,33 +19,87 @@
 package co.rsk.remasc;
 
 import co.rsk.blockchain.utils.BlockGenerator;
+import co.rsk.config.RskSystemProperties;
 import co.rsk.config.TestSystemProperties;
 import co.rsk.core.Coin;
 import co.rsk.core.RskAddress;
-import co.rsk.db.RepositoryImpl;
-import co.rsk.db.RepositoryImplForTesting;
-import org.ethereum.core.Block;
-import org.ethereum.core.Repository;
+import co.rsk.core.TransactionExecutorFactory;
+import co.rsk.core.bc.BlockExecutor;
+import co.rsk.db.MutableTrieCache;
+import co.rsk.db.MutableTrieImpl;
+import co.rsk.db.RepositoryLocator;
+import co.rsk.db.StateRootHandler;
+import co.rsk.peg.PegTestUtils;
+import co.rsk.test.builders.BlockChainBuilder;
+import co.rsk.trie.Trie;
+import co.rsk.trie.TrieConverter;
+import org.ethereum.config.Constants;
+import org.ethereum.config.blockchain.upgrades.ActivationConfigsForTest;
+import org.ethereum.config.blockchain.upgrades.ConsensusRule;
+import org.ethereum.core.*;
+import org.ethereum.crypto.ECKey;
+import org.ethereum.crypto.Keccak256Helper;
+import org.ethereum.datasource.HashMapDB;
+import org.ethereum.db.MutableRepository;
+import org.ethereum.vm.PrecompiledContracts;
+import org.ethereum.vm.program.invoke.ProgramInvokeFactoryImpl;
 import org.junit.Assert;
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
-import java.util.SortedMap;
+import java.math.BigInteger;
+import java.util.*;
+
+import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
 /**
  * Created by usuario on 13/04/2017.
  */
 public class RemascStorageProviderTest {
 
-    private final TestSystemProperties config = new TestSystemProperties();
+    private ECKey cowKey = ECKey.fromPrivate(Keccak256Helper.keccak256("cow".getBytes()));
+    private Coin cowInitialBalance = new Coin(new BigInteger("1000000000000000000"));
+    private long initialGasLimit = 10000000L;
+    private byte[] cowAddress = cowKey.getAddress();
+    private Map<byte[], BigInteger> preMineMap = Collections.singletonMap(cowAddress, cowInitialBalance.asBigInteger());
+    private Genesis genesisBlock = (Genesis) (new BlockGenerator()).getNewGenesisBlock(initialGasLimit, preMineMap);
+
+    private void validateRemascsStorageIsCorrect(RemascStorageProvider provider, Coin expectedRewardBalance, Coin expectedBurnedBalance, long expectedSiblingsSize) {
+        assertEquals(expectedRewardBalance, provider.getRewardBalance());
+        assertEquals(expectedBurnedBalance, provider.getBurnedBalance());
+    }
+
+    private RemascStorageProvider getRemascStorageProvider(Blockchain blockchain) throws IOException {
+        return new RemascStorageProvider(blockchain.getRepository(), PrecompiledContracts.REMASC_ADDR);
+    }
+
+    private List<Block> createSimpleBlocks(Block parent, int size, RskAddress coinbase) {
+        List<Block> chain = new ArrayList<>();
+
+        while (chain.size() < size) {
+            Block newblock = RemascTestRunner.createBlock(this.genesisBlock, parent, PegTestUtils.createHash3(),
+                                                          coinbase, Collections.emptyList(), null);
+            chain.add(newblock);
+            parent = newblock;
+        }
+
+        return chain;
+    }
+
+    private RskAddress randomAddress() {
+        byte[] bytes = new byte[20];
+
+        new Random().nextBytes(bytes);
+
+        return new RskAddress(bytes);
+    }
 
     @Test
     public void getDefautRewardBalance() {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImpl(config);
+        Repository repository = createRepository();
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -55,7 +109,7 @@ public class RemascStorageProviderTest {
     @Test
     public void setAndGetRewardBalance() {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImpl(config);
+        Repository repository = createRepository();
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -67,7 +121,7 @@ public class RemascStorageProviderTest {
     @Test
     public void setSaveRetrieveAndGetRewardBalance() throws IOException {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImplForTesting();
+        Repository repository = new MutableRepository(new MutableTrieImpl(new Trie()));
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -83,7 +137,7 @@ public class RemascStorageProviderTest {
     @Test
     public void getDefautBurnedBalance() {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImpl(config);
+        Repository repository = createRepository();
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -93,7 +147,7 @@ public class RemascStorageProviderTest {
     @Test
     public void setAndGetBurnedBalance() {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImpl(config);
+        Repository repository = createRepository();
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -105,7 +159,7 @@ public class RemascStorageProviderTest {
     @Test
     public void setSaveRetrieveAndGetBurnedBalance() throws IOException {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImplForTesting();
+        Repository repository = new MutableRepository(new MutableTrieImpl(new Trie()));
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -121,7 +175,7 @@ public class RemascStorageProviderTest {
     @Test
     public void getDefaultBrokenSelectionRule() {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImpl(config);
+        Repository repository = createRepository();
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -131,7 +185,7 @@ public class RemascStorageProviderTest {
     @Test
     public void setAndGetBrokenSelectionRule() {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImpl(config);
+        Repository repository = createRepository();
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -143,7 +197,7 @@ public class RemascStorageProviderTest {
     @Test
     public void setSaveRetrieveAndGetBrokenSelectionRule() throws IOException {
         RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImplForTesting();
+        Repository repository = new MutableRepository(new MutableTrieImpl(new Trie()));
 
         RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
@@ -157,161 +211,248 @@ public class RemascStorageProviderTest {
     }
 
     @Test
-    public void getDefaultSiblings() {
-        RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImpl(config);
+    public void setSaveRetrieveAndGetSiblingsBeforeRFS() throws IOException {
+        RskSystemProperties config = spy(new TestSystemProperties());
+        when(config.getActivationConfig()).thenReturn(ActivationConfigsForTest.allBut(ConsensusRule.RSKIP85));
+        long minerFee = 21000;
+        long txValue = 10000;
 
-        RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
-        SortedMap<Long, List<Sibling>> map = provider.getSiblings();
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock).setConfig(config);
 
-        Assert.assertNotNull(map);
-        Assert.assertTrue(map.isEmpty());
+        List<SiblingElement> siblings = Arrays.asList(new SiblingElement(5, 6, minerFee), new SiblingElement(10, 11, minerFee));
+
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(15).siblingElements(siblings).txSigningKey(this.cowKey);
+
+        testRunner.start();
+        this.validateRemascsStorageIsCorrect(this.getRemascStorageProvider(testRunner.getBlockChain()), Coin.valueOf(0), Coin.valueOf(0L), 1L);
     }
 
     @Test
-    public void setAndGetSiblings() {
-        RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImpl(config);
+    public void setSaveRetrieveAndGetSiblingsAfterRFS() throws IOException {
+        long minerFee = 21000;
+        long txValue = 10000;
 
-        RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
 
-        BlockGenerator blockGenerator = new BlockGenerator();
-        Block genesis = blockGenerator.getGenesisBlock();
-        Block block = blockGenerator.createChildBlock(genesis);
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock);
 
-        Sibling sibling1 = new Sibling(genesis.getHeader(), genesis.getCoinbase(), 1);
-        Sibling sibling2 = new Sibling(block.getHeader(), block.getCoinbase(), 2);
+        List<SiblingElement> siblings = Arrays.asList(
+                new SiblingElement(5, 6, minerFee),
+                new SiblingElement(10, 11, minerFee)
+        );
 
-        List<Sibling> siblings = new ArrayList<>();
-        siblings.add(sibling1);
-        siblings.add(sibling2);
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(15).siblingElements(siblings).txSigningKey(this.cowKey);
 
-        provider.getSiblings().put(Long.valueOf(1), siblings);
-
-        SortedMap<Long, List<Sibling>> map = provider.getSiblings();
-
-        Assert.assertNotNull(map);
-        Assert.assertFalse(map.isEmpty());
-        Assert.assertTrue(map.containsKey(Long.valueOf(1)));
-
-        Assert.assertEquals(2, map.get(Long.valueOf(1)).size());
+        testRunner.start();
+        this.validateRemascsStorageIsCorrect(
+                this.getRemascStorageProvider(testRunner.getBlockChain()),
+                Coin.valueOf(0L),
+                Coin.valueOf(0L),
+                0L
+        );
     }
 
     @Test
-    public void setSaveRetrieveAndGetSiblings() throws IOException {
-        RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImplForTesting();
+    public void alwaysPaysBeforeRFS() throws IOException {
+        RskSystemProperties config = spy(new TestSystemProperties());
+        when(config.getActivationConfig()).thenReturn(ActivationConfigsForTest.allBut(ConsensusRule.RSKIP85));
 
-        RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
+        long minerFee = 21000;
+        long txValue = 10000;
+        long gasPrice = 1L;
 
-        BlockGenerator blockGenerator = new BlockGenerator();
-        Block genesis = blockGenerator.getGenesisBlock();
-        Block block = blockGenerator.createChildBlock(genesis);
 
-        Sibling sibling1 = new Sibling(genesis.getHeader(), genesis.getCoinbase(), 1);
-        Sibling sibling2 = new Sibling(block.getHeader(), block.getCoinbase(), 2);
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock).setConfig(config);
 
-        List<Sibling> siblings = new ArrayList<>();
-        siblings.add(sibling1);
-        siblings.add(sibling2);
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(15).siblingElements(new ArrayList<>()).txSigningKey(this.cowKey).gasPrice(gasPrice);
 
-        provider.getSiblings().put(Long.valueOf(1), siblings);
-
-        provider.save();
-
-        RemascStorageProvider newProvider = new RemascStorageProvider(repository, accountAddress);
-
-        SortedMap<Long, List<Sibling>> map = newProvider.getSiblings();
-
-        Assert.assertNotNull(map);
-        Assert.assertFalse(map.isEmpty());
-        Assert.assertTrue(map.containsKey(Long.valueOf(1)));
-
-        Assert.assertEquals(2, map.get(Long.valueOf(1)).size());
+        testRunner.start();
+        this.validateRemascsStorageIsCorrect(this.getRemascStorageProvider(testRunner.getBlockChain()), Coin.valueOf(84000), Coin.valueOf(0L), 0L);
     }
 
     @Test
-    public void setSaveRetrieveAndGetManySiblings() throws IOException {
-        RskAddress accountAddress = randomAddress();
-        Repository repository = new RepositoryImplForTesting();
+    public void alwaysPaysFedBeforeRFS() throws IOException {
+        RskSystemProperties config = spy(new TestSystemProperties());
+        when(config.getActivationConfig()).thenReturn(ActivationConfigsForTest.allBut(ConsensusRule.RSKIP85));
 
-        RemascStorageProvider provider = new RemascStorageProvider(repository, accountAddress);
+        long minerFee = 21000;
+        long txValue = 10000;
+        long gasPrice = 1L;
 
-        BlockGenerator blockGenerator = new BlockGenerator();
-        Block genesis = blockGenerator.getGenesisBlock();
-        Block block1 = blockGenerator.createChildBlock(genesis);
-        Block block2 = blockGenerator.createChildBlock(block1);
-        Block block3 = blockGenerator.createChildBlock(block2);
-        Block block4 = blockGenerator.createChildBlock(block3);
-        Block block5 = blockGenerator.createChildBlock(block4);
 
-        Sibling sibling1 = new Sibling(genesis.getHeader(), genesis.getCoinbase(), 1);
-        Sibling sibling2 = new Sibling(block1.getHeader(), block1.getCoinbase(), 2);
-        Sibling sibling3 = new Sibling(block2.getHeader(), block2.getCoinbase(), 3);
-        Sibling sibling4 = new Sibling(block3.getHeader(), block3.getCoinbase(), 4);
-        Sibling sibling5 = new Sibling(block4.getHeader(), block4.getCoinbase(), 5);
-        Sibling sibling6 = new Sibling(block5.getHeader(), block5.getCoinbase(), 6);
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock).setConfig(config);
 
-        List<Sibling> siblings0 = new ArrayList<>();
-        List<Sibling> siblings1 = new ArrayList<>();
-        List<Sibling> siblings2 = new ArrayList<>();
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(15).siblingElements(new ArrayList<>()).txSigningKey(this.cowKey).gasPrice(gasPrice);
 
-        siblings0.add(sibling1);
-        siblings0.add(sibling2);
-
-        siblings1.add(sibling3);
-        siblings1.add(sibling4);
-
-        siblings2.add(sibling5);
-        siblings2.add(sibling6);
-
-        provider.getSiblings().put(Long.valueOf(0), siblings0);
-        provider.getSiblings().put(Long.valueOf(1), siblings1);
-        provider.getSiblings().put(Long.valueOf(2), siblings2);
-
-        provider.save();
-
-        RemascStorageProvider newProvider = new RemascStorageProvider(repository, accountAddress);
-
-        SortedMap<Long, List<Sibling>> map = newProvider.getSiblings();
-
-        Assert.assertNotNull(map);
-        Assert.assertFalse(map.isEmpty());
-
-        Assert.assertTrue(map.containsKey(Long.valueOf(0)));
-        Assert.assertTrue(map.containsKey(Long.valueOf(1)));
-        Assert.assertTrue(map.containsKey(Long.valueOf(2)));
-
-        Assert.assertEquals(2, map.get(Long.valueOf(0)).size());
-        Assert.assertEquals(2, map.get(Long.valueOf(1)).size());
-        Assert.assertEquals(2, map.get(Long.valueOf(2)).size());
-
-        List<Sibling> list0 = map.get(Long.valueOf(0));
-        List<Sibling> list1 = map.get(Long.valueOf(1));
-        List<Sibling> list2 = map.get(Long.valueOf(2));
-
-        Assert.assertEquals(1, list0.get(0).getIncludedHeight());
-        Assert.assertArrayEquals(genesis.getHeader().getHash().getBytes(), list0.get(0).getHash());
-        Assert.assertEquals(2, list0.get(1).getIncludedHeight());
-        Assert.assertArrayEquals(block1.getHeader().getHash().getBytes(), list0.get(1).getHash());
-
-        Assert.assertEquals(3, list1.get(0).getIncludedHeight());
-        Assert.assertArrayEquals(block2.getHeader().getHash().getBytes(), list1.get(0).getHash());
-        Assert.assertEquals(4, list1.get(1).getIncludedHeight());
-        Assert.assertArrayEquals(block3.getHeader().getHash().getBytes(), list1.get(1).getHash());
-
-        Assert.assertEquals(5, list2.get(0).getIncludedHeight());
-        Assert.assertArrayEquals(block4.getHeader().getHash().getBytes(), list2.get(0).getHash());
-        Assert.assertEquals(6, list2.get(1).getIncludedHeight());
-        Assert.assertArrayEquals(block5.getHeader().getHash().getBytes(), list2.get(1).getHash());
+        testRunner.start();
+        Repository repository = testRunner.getBlockChain().getRepository();
+        RemascFederationProvider federationProvider = new RemascFederationProvider(config.getActivationConfig(), config.getNetworkConstants().getBridgeConstants(), repository, testRunner.getBlockChain().getBestBlock());
+        assertEquals(Coin.valueOf(0), this.getRemascStorageProvider(testRunner.getBlockChain()).getFederationBalance());
+        long federatorBalance = (168 / federationProvider.getFederationSize()) * 2;
+        assertEquals(Coin.valueOf(federatorBalance), RemascTestRunner.getAccountBalance(repository, federationProvider.getFederatorAddress(0)));
     }
 
-    private RskAddress randomAddress() {
-        byte[] bytes = new byte[20];
+    @Test
+    public void doesntPayFedBelowMinimumRewardAfterRFS() throws IOException {
+        Constants constants = spy(Constants.testnet());
+        // we need to pass chain id check, and make believe that testnet config has same chain id as cow account
+        when(constants.getChainId()).thenReturn(Constants.REGTEST_CHAIN_ID);
+        when(constants.getMinimumPayableGas()).thenReturn(BigInteger.valueOf(0));
+        when(constants.getFederatorMinimumPayableGas()).thenReturn(BigInteger.valueOf(10000L));
+        RskSystemProperties config = spy(new TestSystemProperties());
+        when(config.getNetworkConstants()).thenReturn(constants);
+        long minerFee = 21000;
+        long txValue = 10000;
+        long gasPrice = 1L;
 
-        new Random().nextBytes(bytes);
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock).setConfig(config);
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(15).siblingElements(new ArrayList<>()).txSigningKey(this.cowKey).gasPrice(gasPrice);
 
-        return new RskAddress(bytes);
+        testRunner.start();
+        Repository repository = testRunner.getBlockChain().getRepository();
+        RemascFederationProvider federationProvider = new RemascFederationProvider(config.getActivationConfig(), config.getNetworkConstants().getBridgeConstants(), repository, testRunner.getBlockChain().getBestBlock());
+        assertEquals(Coin.valueOf(336), this.getRemascStorageProvider(testRunner.getBlockChain()).getFederationBalance());
+        assertEquals(null, RemascTestRunner.getAccountBalance(repository, federationProvider.getFederatorAddress(0)));
+    }
+
+    @Test
+    public void doesntPayBelowMinimumRewardAfterRFS() throws IOException {
+        Constants constants = spy(Constants.testnet());
+        // we need to pass chain id check, and make believe that testnet config has same chain id as cow account
+        when(constants.getChainId()).thenReturn(Constants.REGTEST_CHAIN_ID);
+        when(constants.getMinimumPayableGas()).thenReturn(BigInteger.valueOf(10000L));
+        RskSystemProperties config = spy(new TestSystemProperties());
+        when(config.getNetworkConstants()).thenReturn(constants);
+        long minerFee = 21000;
+        long txValue = 10000;
+        long gasPrice = 1L;
+
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock).setConfig(config);
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(15).siblingElements(new ArrayList<>()).txSigningKey(this.cowKey).gasPrice(gasPrice);
+
+        testRunner.start();
+        this.validateRemascsStorageIsCorrect(this.getRemascStorageProvider(testRunner.getBlockChain()), Coin.valueOf(126000), Coin.valueOf(0L), 0L);
+    }
+
+    @Test
+    public void paysFedWhenHigherThanMinimumRewardAfterRFS() throws IOException {
+        Constants constants = spy(Constants.testnet());
+        // we need to pass chain id check, and make believe that testnet config has same chain id as cow account
+        when(constants.getChainId()).thenReturn(Constants.REGTEST_CHAIN_ID);
+        when(constants.getMinimumPayableGas()).thenReturn(BigInteger.valueOf(0));
+        when(constants.getFederatorMinimumPayableGas()).thenReturn(BigInteger.valueOf(10L));
+        RskSystemProperties config = spy(new TestSystemProperties());
+        when(config.getNetworkConstants()).thenReturn(constants);
+        long minerFee = 21000;
+        long txValue = 10000;
+        long gasPrice = 10L;
+
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock).setConfig(config);
+
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(15).siblingElements(new ArrayList<>()).txSigningKey(this.cowKey).gasPrice(gasPrice);
+
+        testRunner.start();
+        Repository repository = testRunner.getBlockChain().getRepository();
+        RemascFederationProvider federationProvider = new RemascFederationProvider(config.getActivationConfig(), config.getNetworkConstants().getBridgeConstants(), repository, testRunner.getBlockChain().getBestBlock());
+        long federatorBalance = (1680 / federationProvider.getFederationSize()) * 2;
+        assertEquals(Coin.valueOf(0), this.getRemascStorageProvider(testRunner.getBlockChain()).getFederationBalance());
+        assertEquals(Coin.valueOf(federatorBalance), RemascTestRunner.getAccountBalance(repository, federationProvider.getFederatorAddress(0)));
+    }
+
+    @Test
+    public void paysWhenHigherThanMinimumRewardAfterRFS() throws IOException {
+        Constants constants = spy(Constants.testnet());
+        // we need to pass chain id check, and make believe that testnet config has same chain id as cow account
+        when(constants.getChainId()).thenReturn(Constants.REGTEST_CHAIN_ID);
+        when(constants.getMinimumPayableGas()).thenReturn(BigInteger.valueOf(21000L));
+        when(constants.getFederatorMinimumPayableGas()).thenReturn(BigInteger.valueOf(10L));
+        RskSystemProperties config = spy(new TestSystemProperties());
+        when(config.getNetworkConstants()).thenReturn(constants);
+        long minerFee = 21000;
+        long txValue = 10000;
+        long gasPrice = 10L;
+
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock).setConfig(config);
+
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(15).siblingElements(new ArrayList<>()).txSigningKey(this.cowKey).gasPrice(gasPrice);
+
+        testRunner.start();
+        this.validateRemascsStorageIsCorrect(this.getRemascStorageProvider(testRunner.getBlockChain()), Coin.valueOf(840000L), Coin.valueOf(0L), 0L);
+    }
+
+    @Test
+    public void paysOnlyBlocksWithEnoughBalanceAccumulatedAfterRFS() throws IOException {
+        Constants constants = spy(Constants.testnet());
+        // we need to pass chain id check, and make believe that testnet config has same chain id as cow account
+        when(constants.getChainId()).thenReturn(Constants.REGTEST_CHAIN_ID);
+        when(constants.getMinimumPayableGas()).thenReturn(BigInteger.valueOf(21000L));
+        RskSystemProperties config = spy(new TestSystemProperties());
+        when(config.getNetworkConstants()).thenReturn(constants);
+        long txValue = 10000;
+        long gasLimit = 100000L;
+        long gasPrice = 10L;
+        long lowGasPrice = 1L;
+        long minerFee = 21000;
+
+        RskAddress coinbase = randomAddress();
+        BlockChainBuilder builder = new BlockChainBuilder().setTesting(true).setGenesis(genesisBlock).setConfig(config);
+
+        RemascTestRunner testRunner = new RemascTestRunner(builder, this.genesisBlock).txValue(txValue).minerFee(minerFee)
+                .initialHeight(13).siblingElements(new ArrayList<>()).txSigningKey(this.cowKey).gasPrice(gasPrice);
+        testRunner.setFixedCoinbase(coinbase);
+        testRunner.start();
+        Blockchain blockchain = testRunner.getBlockChain();
+        List<Block> blocks = new ArrayList<>();
+        blocks.add(RemascTestRunner.createBlock(genesisBlock, blockchain.getBestBlock(), PegTestUtils.createHash3(),
+                coinbase, Collections.emptyList(), gasLimit, gasPrice, 14, txValue, cowKey, null));
+        blocks.add(RemascTestRunner.createBlock(genesisBlock, blocks.get(blocks.size()-1), PegTestUtils.createHash3(),
+                coinbase, Collections.emptyList(), gasLimit, lowGasPrice, 15, txValue, cowKey, null));
+        blocks.add(RemascTestRunner.createBlock(genesisBlock, blocks.get(blocks.size()-1), PegTestUtils.createHash3(),
+                coinbase, Collections.emptyList(), gasLimit, gasPrice, 16, txValue, cowKey, null));
+        blocks.add(RemascTestRunner.createBlock(genesisBlock, blocks.get(blocks.size()-1), PegTestUtils.createHash3(),
+                coinbase, Collections.emptyList(), gasLimit, lowGasPrice, 17, txValue, cowKey, null));
+
+        blocks.addAll(createSimpleBlocks(blocks.get(blocks.size()-1),10, coinbase));
+
+        StateRootHandler stateRootHandler = new StateRootHandler(config.getActivationConfig(), new TrieConverter(), new HashMapDB(), new HashMap<>());
+        BlockExecutor blockExecutor = new BlockExecutor(
+                config.getActivationConfig(),
+                new RepositoryLocator(blockchain.getRepository(), stateRootHandler),
+                stateRootHandler,
+                new TransactionExecutorFactory(
+                        config,
+                        blockchain.getBlockStore(),
+                        null,
+                        new BlockFactory(config.getActivationConfig()),
+                        new ProgramInvokeFactoryImpl()
+                )
+        );
+
+        for (Block b : blocks) {
+            blockExecutor.executeAndFillAll(b, blockchain.getBestBlock().getHeader());
+            Assert.assertEquals(ImportResult.IMPORTED_BEST, blockchain.tryToConnect(b));
+            blockchain.getRepository().syncToRoot(builder.getStateRootHandler().translate(b.getHeader()).getBytes());
+
+            long blockNumber = blockchain.getBestBlock().getNumber();
+            if (blockNumber == 24){ // before first special block
+                assertEquals(Coin.valueOf(1663200L), RemascTestRunner.getAccountBalance(blockchain.getRepository(), coinbase));
+            } else if (blockNumber == 25 || blockNumber == 26){ // after first and second special block
+                assertEquals(Coin.valueOf(1829520L), RemascTestRunner.getAccountBalance(blockchain.getRepository(), coinbase));
+            } else if (blockNumber == 27 || blockNumber == 28){ // after third and fourth special block
+                assertEquals(Coin.valueOf(1999167L), RemascTestRunner.getAccountBalance(blockchain.getRepository(), coinbase));
+            }
+        }
+    }
+
+    private static Repository createRepository() {
+        return new MutableRepository(new MutableTrieCache(new MutableTrieImpl(new Trie())));
     }
 }

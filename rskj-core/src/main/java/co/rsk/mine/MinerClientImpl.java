@@ -18,19 +18,15 @@
 
 package co.rsk.mine;
 
-import co.rsk.config.RskSystemProperties;
-import co.rsk.core.Rsk;
 import co.rsk.panic.PanicProcessor;
-import org.ethereum.config.blockchain.DevNetConfig;
-import org.ethereum.config.blockchain.RegTestConfig;
+import co.rsk.core.Rsk;
 import org.ethereum.rpc.TypeConverter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 
 import javax.annotation.Nonnull;
 import java.math.BigInteger;
+import java.time.Duration;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -40,19 +36,16 @@ import java.util.TimerTask;
  * uses MinerServer to build blocks to mine and publish blocks once a valid nonce was found.
  * @author Oscar Guindzberg
  */
-
-@Component("MinerClient")
 public class MinerClientImpl implements MinerClient {
     private long nextNonceToUse = 0;
 
     private static final Logger logger = LoggerFactory.getLogger("minerClient");
     private static final PanicProcessor panicProcessor = new PanicProcessor();
 
-    private static final long DELAY_BETWEEN_GETWORK_REFRESH_MS = 1000;
-
     private final Rsk rsk;
     private final MinerServer minerServer;
-    private final RskSystemProperties config;
+    private final Duration delayBetweenBlocks;
+    private final Duration delayBetweenRefreshes;
 
     private volatile boolean stop = false;
 
@@ -63,16 +56,16 @@ public class MinerClientImpl implements MinerClient {
     private volatile MinerWork work;
     private Timer aTimer;
 
-    @Autowired
-    public MinerClientImpl(Rsk rsk, MinerServer minerServer, RskSystemProperties config) {
+    public MinerClientImpl(Rsk rsk, MinerServer minerServer, Duration delayBetweenBlocks, Duration delayBetweenRefreshes) {
         this.rsk = rsk;
         this.minerServer = minerServer;
-        this.config = config;
+        this.delayBetweenBlocks = delayBetweenBlocks;
+        this.delayBetweenRefreshes = delayBetweenRefreshes;
     }
 
-    public void mine() {
+    public void start() {
         aTimer = new Timer("Refresh work for mining");
-        aTimer.schedule(createRefreshWork(), 0, DELAY_BETWEEN_GETWORK_REFRESH_MS);
+        aTimer.schedule(createRefreshWork(), 0, this.delayBetweenRefreshes.toMillis());
 
         Thread doWorkThread = this.createDoWorkThread();
         doWorkThread.start();
@@ -104,11 +97,8 @@ public class MinerClientImpl implements MinerClient {
     public void doWork() {
         try {
             if (mineBlock()) {
-                if (config.getBlockchainConfig() instanceof RegTestConfig) {
-                    Thread.sleep(1000);
-                }
-                else if (config.getBlockchainConfig() instanceof DevNetConfig) {
-                    Thread.sleep(20000);
+                if (!this.delayBetweenBlocks.isZero()) {
+                    Thread.sleep(this.delayBetweenBlocks.toMillis());
                 }
             }
         } catch (Exception e) {
@@ -121,15 +111,6 @@ public class MinerClientImpl implements MinerClient {
     public boolean mineBlock() {
         if (this.rsk != null) {
             if (this.rsk.hasBetterBlockToSync()) {
-                try {
-                    Thread.sleep(10000);
-                } catch (InterruptedException ex) {
-                    logger.error("Interrupted mining sleep", ex);
-                }
-                return false;
-            }
-
-            if (this.rsk.isPlayingBlocks()) {
                 try {
                     Thread.sleep(10000);
                 } catch (InterruptedException ex) {
@@ -158,44 +139,13 @@ public class MinerClientImpl implements MinerClient {
         }
 
         if (foundNonce) {
-            logger.info("Mined block: " + work.getBlockHashForMergedMining());
+            logger.info("Mined block: {}", work.getBlockHashForMergedMining());
             minerServer.submitBitcoinBlock(work.getBlockHashForMergedMining(), bitcoinMergedMiningBlock);
         }
 
         return foundNonce;
     }
 
-    @Override
-    public boolean fallbackMineBlock() {
-        // This is not used now. In the future this method could allow
-        // a HSM to provide the signature for an RSK block here.
-
-        if (this.rsk != null) {
-            if (this.rsk.hasBetterBlockToSync()) {
-                try {
-                    Thread.sleep(10000);
-                } catch (InterruptedException ex) {
-                    logger.error("Interrupted mining sleep", ex);
-                }
-                return false;
-            }
-
-            if (this.rsk.isPlayingBlocks()) {
-                try {
-                    Thread.sleep(10000);
-                } catch (InterruptedException ex) {
-                    logger.error("Interrupted mining sleep", ex);
-                }
-                return false;
-            }
-        }
-        if (stop) {
-            logger.info("Interrupted mining because MinerClient was stopped");
-        }
-
-        return minerServer.generateFallbackBlock();
-
-    }
     /**
      * findNonce will try to find a valid nonce for bitcoinMergedMiningBlock, that satisfies the given target difficulty.
      *
@@ -217,7 +167,7 @@ public class MinerClientImpl implements MinerClient {
             // No, so increment the nonce and try again.
             bitcoinMergedMiningBlock.setNonce(nextNonceToUse++);
             if (bitcoinMergedMiningBlock.getNonce() % 100000 == 0) {
-                logger.debug("Solving block. Nonce: " + bitcoinMergedMiningBlock.getNonce());
+                logger.debug("Solving block. Nonce: {}", bitcoinMergedMiningBlock.getNonce());
             }
         }
 
@@ -243,7 +193,7 @@ public class MinerClientImpl implements MinerClient {
             if (previousWork != null && receivedWork != null &&
                     !receivedWork.getBlockHashForMergedMining().equals(previousWork.getBlockHashForMergedMining())) {
                 newBestBlockArrivedFromAnotherNode = true;
-                logger.debug("There is a new best block : " + receivedWork.getBlockHashForMergedMining());
+                logger.debug("There is a new best block: {}", receivedWork.getBlockHashForMergedMining());
             }
         }
     }

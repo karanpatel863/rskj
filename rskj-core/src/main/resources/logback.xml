@@ -62,7 +62,6 @@
     <logger name="trie" level="INFO"/>
     <logger name="peermonitor" level="INFO"/>
     <logger name="bridge" level="INFO"/>
-    <logger name="org.springframework" level="INFO"/>
     <logger name="rlp" level="INFO"/>
     <logger name="messagehandler" level="INFO"/>
     <logger name="sync" level="INFO"/>
@@ -80,6 +79,8 @@
     <logger name="org.bitcoinj" level="INFO"/>
     <logger name="metrics" level="INFO"/>
     <logger name="messageProcess" level="INFO"/>
+    <logger name="co.rsk.db.migration.OrchidToUnitrieMigrator" level="INFO"/>
+    <logger name="co.rsk.db.migration.MissingOrchidStorageKeysProvider" level="INFO"/>
 
     <root level="DEBUG">
         <appender-ref ref="stdout"/>

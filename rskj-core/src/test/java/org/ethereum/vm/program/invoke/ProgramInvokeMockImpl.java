@@ -19,15 +19,18 @@
 
 package org.ethereum.vm.program.invoke;
 
+import co.rsk.core.Coin;
 import co.rsk.core.RskAddress;
-import co.rsk.db.RepositoryImplForTesting;
+import co.rsk.db.MutableTrieImpl;
+import co.rsk.trie.Trie;
 import org.ethereum.core.Repository;
 import org.ethereum.crypto.ECKey;
 import org.ethereum.crypto.HashUtil;
 import org.ethereum.db.BlockStore;
 import org.ethereum.db.BlockStoreDummy;
+import org.ethereum.db.MutableRepository;
 import org.ethereum.vm.DataWord;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.nio.charset.StandardCharsets;
 
@@ -43,8 +46,9 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
 
     private Repository repository;
     private RskAddress ownerAddress = new RskAddress("cd2a3d9f938e13cd947ec05abc7fe734df8dd826");
-    private final RskAddress contractAddress = new RskAddress("471fd3ad3e9eeadeec4608b92d16ce6b500704cc");
+    private final RskAddress defaultContractAddress = new RskAddress("471fd3ad3e9eeadeec4608b92d16ce6b500704cc");
 
+    private RskAddress contractAddress;
     // default for most tests. This can be overwritten by the test
     private long gasLimit = 1000000;
 
@@ -53,34 +57,50 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
         this.msgData = msgDataRaw;
     }
 
-    public ProgramInvokeMockImpl() {
-        this.repository = new RepositoryImplForTesting();
+    public ProgramInvokeMockImpl(String contractCode, RskAddress contractAddress) {
+        this(Hex.decode(contractCode), contractAddress);
+    }
+
+    public ProgramInvokeMockImpl(byte[] contractCode, RskAddress contractAddress) {
+        this.repository = new MutableRepository(new MutableTrieImpl(new Trie()));
 
         this.repository.createAccount(ownerAddress);
+        //Defaults to defaultContractAddress constant defined in this mock
+        this.contractAddress = contractAddress!=null?contractAddress:this.defaultContractAddress;
+        this.repository.createAccount(this.contractAddress);
+        this.repository.saveCode(this.contractAddress, contractCode);
+        this.txindex = DataWord.ZERO;
+    }
 
-        this.repository.createAccount(contractAddress);
-        this.repository.saveCode(contractAddress,
-                Hex.decode("385E60076000396000605f556014600054601e60"
-                        + "205463abcddcba6040545b51602001600a525451"
-                        + "6040016014525451606001601e52545160800160"
-                        + "28525460a052546016604860003960166000f260"
-                        + "00603f556103e75660005460005360200235"));
+    public void addAccount(RskAddress accountAddress,Coin balance) {
+        this.repository.createAccount(accountAddress);
+        this.repository.addBalance(accountAddress, balance);
+    }
+
+    public ProgramInvokeMockImpl() {
+        this("385E60076000396000605f556014600054601e60"
+                + "205463abcddcba6040545b51602001600a525451"
+                + "6040016014525451606001601e52545160800160"
+                + "28525460a052546016604860003960166000f260"
+                + "00603f556103e75660005460005360200235", null);
+    }
+
+    public RskAddress getContractAddress() {
+        return this.contractAddress;
     }
 
     public ProgramInvokeMockImpl(boolean defaults) {
-
-
     }
 
     /*           ADDRESS op         */
     public DataWord getOwnerAddress() {
-        return new DataWord(ownerAddress.getBytes());
+        return DataWord.valueOf(ownerAddress.getBytes());
     }
 
     /*           BALANCE op         */
     public DataWord getBalance() {
         byte[] balance = Hex.decode("0DE0B6B3A7640000");
-        return new DataWord(balance);
+        return DataWord.valueOf(balance);
     }
 
     /*           ORIGIN op         */
@@ -89,7 +109,7 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
         byte[] cowPrivKey = HashUtil.keccak256("horse".getBytes(StandardCharsets.UTF_8));
         byte[] addr = ECKey.fromPrivate(cowPrivKey).getAddress();
 
-        return new DataWord(addr);
+        return DataWord.valueOf(addr);
     }
 
     /*           CALLER op         */
@@ -98,14 +118,14 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
         byte[] cowPrivKey = HashUtil.keccak256("monkey".getBytes(StandardCharsets.UTF_8));
         byte[] addr = ECKey.fromPrivate(cowPrivKey).getAddress();
 
-        return new DataWord(addr);
+        return DataWord.valueOf(addr);
     }
 
     /*           GASPRICE op       */
     public DataWord getMinGasPrice() {
 
         byte[] minGasPrice = Hex.decode("09184e72a000");
-        return new DataWord(minGasPrice);
+        return DataWord.valueOf(minGasPrice);
     }
 
     /*           GAS op       */
@@ -121,7 +141,7 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
     /*          CALLVALUE op    */
     public DataWord getCallValue() {
         byte[] balance = Hex.decode("0DE0B6B3A7640000");
-        return new DataWord(balance);
+        return DataWord.valueOf(balance);
     }
 
     /*****************/
@@ -138,21 +158,21 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
         int index = indexData.value().intValue();
         int size = 32;
 
-        if (msgData == null) return new DataWord(data);
-        if (index > msgData.length) return new DataWord(data);
+        if (msgData == null) return DataWord.valueOf(data);
+        if (index > msgData.length) return DataWord.valueOf(data);
         if (index + 32 > msgData.length) size = msgData.length - index;
 
         System.arraycopy(msgData, index, data, 0, size);
 
-        return new DataWord(data);
+        return DataWord.valueOf(data);
     }
 
     /*  CALLDATASIZE */
     public DataWord getDataSize() {
 
-        if (msgData == null || msgData.length == 0) return new DataWord(new byte[32]);
+        if (msgData == null || msgData.length == 0) return DataWord.valueOf(new byte[32]);
         int size = msgData.length;
-        return new DataWord(size);
+        return DataWord.valueOf(size);
     }
 
     /*  CALLDATACOPY */
@@ -175,25 +195,25 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
     @Override
     public DataWord getPrevHash() {
         byte[] prevHash = Hex.decode("961CB117ABA86D1E596854015A1483323F18883C2D745B0BC03E87F146D2BB1C");
-        return new DataWord(prevHash);
+        return DataWord.valueOf(prevHash);
     }
 
     @Override
     public DataWord getCoinbase() {
         byte[] coinBase = Hex.decode("E559DE5527492BCB42EC68D07DF0742A98EC3F1E");
-        return new DataWord(coinBase);
+        return DataWord.valueOf(coinBase);
     }
 
     @Override
     public DataWord getTimestamp() {
         long timestamp = 1401421348;
-        return new DataWord(timestamp);
+        return DataWord.valueOf(timestamp);
     }
 
     @Override
     public DataWord getNumber() {
         long number = 33;
-        return new DataWord(number);
+        return DataWord.valueOf(number);
     }
 
     @Override
@@ -208,12 +228,12 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
     @Override
     public DataWord getDifficulty() {
         byte[] difficulty = Hex.decode("3ED290");
-        return new DataWord(difficulty);
+        return DataWord.valueOf(difficulty);
     }
 
     @Override
     public DataWord getGaslimit() {
-        return new DataWord(gasLimit);
+        return DataWord.valueOf(gasLimit);
     }
 
 
@@ -228,6 +248,11 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
     @Override
     public boolean byTransaction() {
         return true;
+    }
+
+    @Override
+    public boolean isStaticCall() {
+        return false;
     }
 
     @Override

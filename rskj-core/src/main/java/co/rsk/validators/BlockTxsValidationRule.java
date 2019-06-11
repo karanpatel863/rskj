@@ -18,8 +18,9 @@
 
 package co.rsk.validators;
 
-import co.rsk.panic.PanicProcessor;
 import co.rsk.core.RskAddress;
+import co.rsk.db.RepositoryLocator;
+import co.rsk.panic.PanicProcessor;
 import org.ethereum.core.Block;
 import org.ethereum.core.Repository;
 import org.ethereum.core.Transaction;
@@ -45,14 +46,15 @@ public class BlockTxsValidationRule implements BlockParentDependantValidationRul
     private static final Logger logger = LoggerFactory.getLogger("blockvalidator");
     private static final PanicProcessor panicProcessor = new PanicProcessor();
 
-    private final Repository repository;
+    private final RepositoryLocator repositoryLocator;
 
-    public BlockTxsValidationRule(Repository repository) {
-        this.repository = repository;
+    public BlockTxsValidationRule(RepositoryLocator repositoryLocator) {
+        this.repositoryLocator = repositoryLocator;
     }
 
     @Override
     public boolean isValid(Block block, Block parent) {
+
         if(block == null || parent == null) {
             logger.warn("BlockTxsValidationRule - block or parent are null");
             return false;
@@ -63,7 +65,7 @@ public class BlockTxsValidationRule implements BlockParentDependantValidationRul
             return true;
         }
 
-        Repository parentRepo = repository.getSnapshotTo(parent.getStateRoot());
+        Repository parentRepo = repositoryLocator.snapshotAt(parent.getHeader());
 
         Map<RskAddress, BigInteger> curNonce = new HashMap<>();
 

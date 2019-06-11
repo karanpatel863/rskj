@@ -25,8 +25,8 @@ import org.ethereum.util.RLPItem;
 import org.ethereum.util.RLPList;
 import org.ethereum.vm.LogInfo;
 
-import org.spongycastle.util.BigIntegers;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.BigIntegers;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.math.BigInteger;
 
@@ -142,7 +142,7 @@ public class TransactionReceipt {
         byte[] postTxStateRLP = RLP.encodeElement(this.postTxState);
         byte[] cumulativeGasRLP = RLP.encodeElement(this.cumulativeGas);
         byte[] gasUsedRLP = RLP.encodeElement(this.gasUsed);
-        byte[] bloomRLP = RLP.encodeElement(this.bloomFilter.data);
+        byte[] bloomRLP = RLP.encodeElement(this.bloomFilter.getData());
         byte[] statusRLP = RLP.encodeElement(this.status);
 
         final byte[] logInfoListRLP;

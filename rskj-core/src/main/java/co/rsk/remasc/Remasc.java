@@ -18,13 +18,13 @@
 
 package co.rsk.remasc;
 
-import co.rsk.bitcoinj.store.BlockStoreException;
 import co.rsk.config.RemascConfig;
-import co.rsk.config.RskSystemProperties;
 import co.rsk.core.Coin;
 import co.rsk.core.RskAddress;
 import co.rsk.core.bc.SelectionRule;
-import org.apache.commons.collections4.CollectionUtils;
+import org.ethereum.config.Constants;
+import org.ethereum.config.blockchain.upgrades.ActivationConfig;
+import org.ethereum.config.blockchain.upgrades.ConsensusRule;
 import org.ethereum.core.Block;
 import org.ethereum.core.BlockHeader;
 import org.ethereum.core.Repository;
@@ -34,10 +34,9 @@ import org.ethereum.vm.LogInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.math.BigInteger;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Implements the actual Remasc distribution logic
@@ -46,7 +45,8 @@ import java.util.List;
 public class Remasc {
     private static final Logger logger = LoggerFactory.getLogger(Remasc.class);
 
-    private final RskSystemProperties config;
+    private final Constants constants;
+    private final ActivationConfig activationConfig;
     private final Repository repository;
     private final BlockStore blockStore;
     private final RemascConfig remascConstants;
@@ -57,8 +57,16 @@ public class Remasc {
     private final RemascStorageProvider provider;
     private final RemascFeesPayer feesPayer;
 
-    public Remasc(RskSystemProperties config, Repository repository, BlockStore blockStore, RemascConfig remascConstants, Transaction executionTx, RskAddress contractAddress, Block executionBlock, List<LogInfo> logs) {
-        this.config = config;
+    public Remasc(
+            Constants constants,
+            ActivationConfig activationConfig,
+            Repository repository,
+            BlockStore blockStore,
+            RemascConfig remascConstants,
+            Transaction executionTx,
+            RskAddress contractAddress,
+            Block executionBlock,
+            List<LogInfo> logs) {
         this.repository = repository;
         this.blockStore = blockStore;
         this.remascConstants = remascConstants;
@@ -68,6 +76,8 @@ public class Remasc {
 
         this.provider = new RemascStorageProvider(repository, contractAddress);
         this.feesPayer = new RemascFeesPayer(repository, contractAddress);
+        this.constants = constants;
+        this.activationConfig = activationConfig;
     }
 
     public void save() {
@@ -79,20 +89,20 @@ public class Remasc {
      * @return the internal contract state.
      */
     public RemascState getStateForDebugging() {
-        return new RemascState(this.provider.getRewardBalance(), this.provider.getBurnedBalance(), this.provider.getSiblings(), this.provider.getBrokenSelectionRule());
+        return new RemascState(this.provider.getRewardBalance(), this.provider.getBurnedBalance(), this.provider.getBrokenSelectionRule());
     }
+
 
     /**
      * Implements the actual Remasc distribution logic
      */
-    void processMinersFees() throws IOException, BlockStoreException {
+    void processMinersFees() {
         if (!(executionTx instanceof RemascTransaction)) {
             //Detect
             // 1) tx to remasc that is not the latest tx in a block
             // 2) invocation to remasc from another contract (ie call opcode)
             throw new RemascInvalidInvocationException("Invoked Remasc outside last tx of the block");
         }
-        this.addNewSiblings();
 
         long blockNbr = executionBlock.getNumber();
 
@@ -102,7 +112,25 @@ public class Remasc {
             return;
         }
 
-        Block processingBlock = blockStore.getBlockByHashAndDepth(executionBlock.getParentHash().getBytes(), remascConstants.getMaturity() - 1);
+        int uncleGenerationLimit = constants.getUncleGenerationLimit();
+        Deque<Map<Long, List<Sibling>>> descendantsBlocks = new LinkedList<>();
+
+        // this search can be optimized if have certainty that the execution block is not in a fork
+        // larger than depth
+        Block currentBlock = blockStore.getBlockByHashAndDepth(
+                executionBlock.getParentHash().getBytes(),
+                remascConstants.getMaturity() - 1 - uncleGenerationLimit
+        );
+        descendantsBlocks.push(blockStore.getSiblingsFromBlockByHash(currentBlock.getHash()));
+
+        // descendants are stored in reverse order because the original order to pay siblings is defined in the way
+        // blocks are ordered in the blockchain (the same as were stored in remasc contract)
+        for (int i = 0; i < uncleGenerationLimit - 1; i++) {
+            currentBlock = blockStore.getBlockByHash(currentBlock.getParentHash().getBytes());
+            descendantsBlocks.push(blockStore.getSiblingsFromBlockByHash(currentBlock.getHash()));
+        }
+
+        Block processingBlock = blockStore.getBlockByHash(currentBlock.getParentHash().getBytes());
         BlockHeader processingBlockHeader = processingBlock.getHeader();
 
         // Adds current block fees to accumulated rewardBalance
@@ -116,25 +144,69 @@ public class Remasc {
             return;
         }
 
+        List<Sibling> siblings = getSiblingsToReward(descendantsBlocks, processingBlockNumber);
+        boolean previousBrokenSelectionRule = provider.getBrokenSelectionRule();
+        boolean brokenSelectionRule = SelectionRule.isBrokenSelectionRule(processingBlockHeader, siblings);
+        provider.setBrokenSelectionRule(!siblings.isEmpty() && brokenSelectionRule);
+
         // Takes from rewardBalance this block's height reward.
-        Coin fullBlockReward = rewardBalance.divide(BigInteger.valueOf(remascConstants.getSyntheticSpan()));
-        rewardBalance = rewardBalance.subtract(fullBlockReward);
+        Coin syntheticReward = rewardBalance.divide(BigInteger.valueOf(remascConstants.getSyntheticSpan()));
+        boolean isRskip85Enabled = activationConfig.isActive(ConsensusRule.RSKIP85, blockNbr);
+        if (isRskip85Enabled) {
+            BigInteger minimumPayableGas = constants.getMinimumPayableGas();
+            Coin minPayableFees = executionBlock.getMinimumGasPrice().multiply(minimumPayableGas);
+            if (syntheticReward.compareTo(minPayableFees) < 0) {
+                logger.debug("Synthetic Reward: {} is lower than minPayableFees: {} at block: {}",
+                             syntheticReward, minPayableFees, executionBlock.getShortHash());
+                return;
+            }
+        }
+
+        rewardBalance = rewardBalance.subtract(syntheticReward);
         provider.setRewardBalance(rewardBalance);
 
         // Pay RSK labs cut
-        Coin payToRskLabs = fullBlockReward.divide(BigInteger.valueOf(remascConstants.getRskLabsDivisor()));
+        Coin payToRskLabs = syntheticReward.divide(BigInteger.valueOf(remascConstants.getRskLabsDivisor()));
         feesPayer.payMiningFees(processingBlockHeader.getHash().getBytes(), payToRskLabs, remascConstants.getRskLabsAddress(), logs);
-        fullBlockReward = fullBlockReward.subtract(payToRskLabs);
+        syntheticReward = syntheticReward.subtract(payToRskLabs);
+        Coin payToFederation = payToFederation(constants, isRskip85Enabled, processingBlock, processingBlockHeader, syntheticReward);
+        syntheticReward = syntheticReward.subtract(payToFederation);
 
-        RemascFederationProvider federationProvider = new RemascFederationProvider(config, repository, processingBlock);
+        if (!siblings.isEmpty()) {
+            // Block has siblings, reward distribution is more complex
+            this.payWithSiblings(processingBlockHeader, syntheticReward, siblings, previousBrokenSelectionRule);
+        } else {
+            if (previousBrokenSelectionRule) {
+                // broken selection rule, apply punishment, ie burn part of the reward.
+                Coin punishment = syntheticReward.divide(BigInteger.valueOf(remascConstants.getPunishmentDivisor()));
+                syntheticReward = syntheticReward.subtract(punishment);
+                provider.setBurnedBalance(provider.getBurnedBalance().add(punishment));
+            }
+            feesPayer.payMiningFees(processingBlockHeader.getHash().getBytes(), syntheticReward, processingBlockHeader.getCoinbase(), logs);
+        }
+    }
 
-        Coin payToFederation = fullBlockReward.divide(BigInteger.valueOf(remascConstants.getFederationDivisor()));
+    private Coin payToFederation(Constants constants, boolean isRskip85Enabled, Block processingBlock, BlockHeader processingBlockHeader, Coin syntheticReward) {
+        RemascFederationProvider federationProvider = new RemascFederationProvider(activationConfig, constants.getBridgeConstants(), repository, processingBlock);
+        Coin federationReward = syntheticReward.divide(BigInteger.valueOf(remascConstants.getFederationDivisor()));
 
+        Coin payToFederation = provider.getFederationBalance().add(federationReward);
         byte[] processingBlockHash = processingBlockHeader.getHash().getBytes();
         int nfederators = federationProvider.getFederationSize();
-        Coin payToFederator = payToFederation.divide(BigInteger.valueOf(nfederators));
-        Coin restToLastFederator = payToFederation.subtract(payToFederator.multiply(BigInteger.valueOf(nfederators)));
-        Coin paidToFederation = Coin.ZERO;
+        Coin[] payAndRemainderToFederator = payToFederation.divideAndRemainder(BigInteger.valueOf(nfederators));
+        Coin payToFederator = payAndRemainderToFederator[0];
+        Coin restToLastFederator = payAndRemainderToFederator[1];
+
+        if (isRskip85Enabled) {
+            BigInteger minimumFederatorPayableGas = constants.getFederatorMinimumPayableGas();
+            Coin minPayableFederatorFees = executionBlock.getMinimumGasPrice().multiply(minimumFederatorPayableGas);
+            if (payToFederator.compareTo(minPayableFederatorFees) < 0) {
+                provider.setFederationBalance(payToFederation);
+                return federationReward;
+            } else { // balance goes to zero because all federation balance will be distributed
+                provider.setFederationBalance(Coin.ZERO);
+            }
+        }
 
         for (int k = 0; k < nfederators; k++) {
             RskAddress federatorAddress = federationProvider.getFederatorAddress(k);
@@ -145,57 +217,22 @@ public class Remasc {
                 feesPayer.payMiningFees(processingBlockHash, payToFederator, federatorAddress, logs);
             }
 
-            paidToFederation = paidToFederation.add(payToFederator);
         }
 
-        fullBlockReward = fullBlockReward.subtract(payToFederation);
-
-        List<Sibling> siblings = provider.getSiblings().get(processingBlockNumber);
-
-        if (CollectionUtils.isNotEmpty(siblings)) {
-            // Block has siblings, reward distribution is more complex
-            boolean previousBrokenSelectionRule = provider.getBrokenSelectionRule();
-            this.payWithSiblings(processingBlockHeader, fullBlockReward, siblings, previousBrokenSelectionRule);
-            boolean brokenSelectionRule = SelectionRule.isBrokenSelectionRule(processingBlockHeader, siblings);
-            provider.setBrokenSelectionRule(brokenSelectionRule);
-        } else {
-            if (provider.getBrokenSelectionRule()) {
-                // broken selection rule, apply punishment, ie burn part of the reward.
-                Coin punishment = fullBlockReward.divide(BigInteger.valueOf(remascConstants.getPunishmentDivisor()));
-                fullBlockReward = fullBlockReward.subtract(punishment);
-                provider.setBurnedBalance(provider.getBurnedBalance().add(punishment));
-            }
-            feesPayer.payMiningFees(processingBlockHeader.getHash().getBytes(), fullBlockReward, processingBlockHeader.getCoinbase(), logs);
-            provider.setBrokenSelectionRule(Boolean.FALSE);
-        }
-
-        this.removeUsedSiblings(processingBlockHeader);
+        return federationReward;
     }
 
     /**
-     * Remove siblings just processed if any
+     * Descendants included on the same chain as the processing block could include siblings
+     * that should be rewarded when fees on this block are paid
+     * @param descendants blocks in the same blockchain that may include rewarded siblings
+     * @param blockNumber number of the block is looked for siblings
+     * @return
      */
-    private void removeUsedSiblings(BlockHeader processingBlockHeader) {
-        provider.getSiblings().remove(processingBlockHeader.getNumber());
-    }
-
-    /**
-     * Saves uncles of the current block into the siblings map to use in the future for fee distribution
-     */
-    private void addNewSiblings() {
-        // Add uncles of the execution block to the siblings map
-        List<BlockHeader> uncles = executionBlock.getUncleList();
-        if (CollectionUtils.isNotEmpty(uncles)) {
-            for (BlockHeader uncleHeader : uncles) {
-                List<Sibling> siblings = provider.getSiblings().get(uncleHeader.getNumber());
-                if (siblings == null) {
-                    siblings = new ArrayList<>();
-                }
-
-                siblings.add(new Sibling(uncleHeader, executionBlock.getHeader().getCoinbase(), executionBlock.getNumber()));
-                provider.getSiblings().put(uncleHeader.getNumber(), siblings);
-            }
-        }
+    private List<Sibling> getSiblingsToReward(Deque<Map<Long, List<Sibling>>> descendants, long blockNumber) {
+        return descendants.stream()
+                .flatMap(map -> map.getOrDefault(blockNumber, Collections.emptyList()).stream())
+                .collect(Collectors.toList());
     }
 
     /**

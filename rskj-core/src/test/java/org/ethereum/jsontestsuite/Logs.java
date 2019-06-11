@@ -23,7 +23,7 @@ import org.ethereum.vm.DataWord;
 import org.ethereum.vm.LogInfo;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
-import org.spongycastle.util.encoders.Hex;
+import org.bouncycastle.util.encoders.Hex;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -45,7 +45,7 @@ public class Logs {
             JSONArray jTopics = (JSONArray) jLog.get("topics");
             for (Object t : jTopics.toArray()) {
                 byte[] topic = Hex.decode(((String) t));
-                topics.add(new DataWord(topic));
+                topics.add(DataWord.valueOf(topic));
             }
 
             LogInfo li = new LogInfo(address, topics, data);

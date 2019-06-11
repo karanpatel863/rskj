@@ -21,20 +21,24 @@ package co.rsk.test.dsl;
 import co.rsk.config.TestSystemProperties;
 import co.rsk.core.Coin;
 import co.rsk.core.RskAddress;
+import co.rsk.core.TransactionExecutorFactory;
 import co.rsk.core.bc.BlockChainImpl;
 import co.rsk.core.bc.BlockExecutor;
+import co.rsk.db.RepositoryLocator;
+import co.rsk.db.StateRootHandler;
 import co.rsk.net.NodeBlockProcessor;
 import co.rsk.test.World;
 import co.rsk.test.builders.AccountBuilder;
 import co.rsk.test.builders.BlockBuilder;
-import org.ethereum.core.Account;
-import org.ethereum.core.Block;
-import org.ethereum.core.ImportResult;
-import org.ethereum.core.Transaction;
+import co.rsk.trie.TrieConverter;
+import org.ethereum.core.*;
+import org.ethereum.datasource.HashMapDB;
+import org.ethereum.vm.program.invoke.ProgramInvokeFactoryImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigInteger;
+import java.util.HashMap;
 import java.util.StringTokenizer;
 
 /**
@@ -183,9 +187,25 @@ public class WorldDslProcessor {
             String name = cmd.getArgument(k);
             Block block = world.getBlockByName(name);
             BlockExecutor executor = world.getBlockExecutor();
-            executor.executeAndFill(block, blockChain.getBestBlock());
+
+            // This execution is JUST to fill the receipts/stateRoot values
+            // of the block, since the block will not contain the correct values for
+            // these fields. The block will be executed AGAIN in tryToConnect().
+            // Note that the repoisitory state will have changed after this execution.
+            // The state is automatically reverted in tryToConnect to the state prior
+            // execution.
+
+            if (block.getParentHash().equals(blockChain.getBestBlock().getHash())) {
+                executor.executeAndFill(block, blockChain.getBestBlock().getHeader());
+            }
+            else {
+                executor.executeAndFill(block, world.getBlockByHash(block.getParentHash()).getHeader());
+            }
+
             block.seal();
+
             latestImportResult = blockChain.tryToConnect(block);
+            blockChain.getRepository().syncToRoot(block.getStateRoot());
         }
     }
 
@@ -224,9 +244,22 @@ public class WorldDslProcessor {
                 difficulty = difficultyTokenizer.hasMoreTokens()?parseDifficulty(difficultyTokenizer.nextToken(),k):k;
             }
             Block block = blockBuilder.difficulty(difficulty).parent(parent).build();
-            BlockExecutor executor = new BlockExecutor(new TestSystemProperties(), world.getRepository(),
-                                                       null, world.getBlockChain().getBlockStore(), null);
-            executor.executeAndFill(block, parent);
+            final ProgramInvokeFactoryImpl programInvokeFactory = new ProgramInvokeFactoryImpl();
+            final TestSystemProperties config = new TestSystemProperties();
+            StateRootHandler stateRootHandler = new StateRootHandler(config.getActivationConfig(), new TrieConverter(), new HashMapDB(), new HashMap<>());
+            BlockExecutor executor = new BlockExecutor(
+                    config.getActivationConfig(),
+                    new RepositoryLocator(world.getRepository(), stateRootHandler),
+                    stateRootHandler,
+                    new TransactionExecutorFactory(
+                            config,
+                            world.getBlockChain().getBlockStore(),
+                            null,
+                            new BlockFactory(config.getActivationConfig()),
+                            programInvokeFactory
+                    )
+            );
+            executor.executeAndFill(block, parent.getHeader());
             world.saveBlock(name, block);
             parent = block;
             k++;

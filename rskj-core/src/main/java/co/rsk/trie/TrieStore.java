@@ -18,19 +18,14 @@
 
 package co.rsk.trie;
 
-/**
- * Created by ajlopez on 29/03/2017.
- */
 public interface TrieStore {
     void save(Trie trie);
 
-    int getSaveCount();
+    void saveValue(Trie trie);
+
+    void flush();
 
     Trie retrieve(byte[] hash);
-
-    int getRetrieveCount();
-
-    byte[] serialize();
 
     byte[] retrieveValue(byte[] hash);
 }

@@ -20,15 +20,13 @@ package co.rsk.peg;
 
 import co.rsk.bitcoinj.core.*;
 import co.rsk.bitcoinj.store.BlockStoreException;
-import co.rsk.bitcoinj.store.BtcBlockStore;
+import co.rsk.config.BridgeConstants;
 import co.rsk.core.RskAddress;
 import co.rsk.util.MaxSizeHashMap;
-import org.ethereum.config.SystemProperties;
 import org.ethereum.core.Repository;
 import org.ethereum.vm.DataWord;
 
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
@@ -41,20 +39,20 @@ public class RepositoryBlockStore implements BtcBlockstoreWithCache {
 
     // power of 2 size that contains enough hashes to handle one year of blocks
     private static final int MAX_SIZE_MAP_STORED_BLOCKS = 65535;
-    private static Map<Sha256Hash, StoredBlock> knownBlocks = new MaxSizeHashMap<>(MAX_SIZE_MAP_STORED_BLOCKS);
+    private static Map<Sha256Hash, StoredBlock> knownBlocks = new MaxSizeHashMap<>(MAX_SIZE_MAP_STORED_BLOCKS, false);
 
     private final Repository repository;
     private final RskAddress contractAddress;
 
     private final NetworkParameters params;
 
-    public RepositoryBlockStore(SystemProperties config, Repository repository, RskAddress contractAddress) {
+    public RepositoryBlockStore(BridgeConstants bridgeConstants, Repository repository, RskAddress contractAddress) {
         this.repository = repository;
         this.contractAddress = contractAddress;
 
         // Insert the genesis block.
         try {
-            this.params = config.getBlockchainConfig().getCommonConstants().getBridgeConstants().getBtcParams();
+            this.params = bridgeConstants.getBtcParams();
             if (getChainHead()==null) {
                 BtcBlock genesisHeader = params.getGenesisBlock().cloneAsHeader();
                 StoredBlock storedGenesis = new StoredBlock(genesisHeader, genesisHeader.getWork(), 0);
@@ -72,13 +70,13 @@ public class RepositoryBlockStore implements BtcBlockstoreWithCache {
     public synchronized void put(StoredBlock block) throws BlockStoreException {
         Sha256Hash hash = block.getHeader().getHash();
         byte[] ba = storedBlockToByteArray(block);
-        repository.addStorageBytes(contractAddress, new DataWord(hash.toString()), ba);
+        repository.addStorageBytes(contractAddress, DataWord.valueFromHex(hash.toString()), ba);
         knownBlocks.put(hash, block);
     }
 
     @Override
     public synchronized StoredBlock get(Sha256Hash hash) throws BlockStoreException {
-        byte[] ba = repository.getStorageBytes(contractAddress, new DataWord(hash.toString()));
+        byte[] ba = repository.getStorageBytes(contractAddress, DataWord.valueFromHex(hash.toString()));
 
         if (ba==null) {
             return null;
@@ -96,7 +94,7 @@ public class RepositoryBlockStore implements BtcBlockstoreWithCache {
             return storedBlock;
         }
 
-        byte[] ba = repository.getStorageBytes(contractAddress, new DataWord(hash.toString()));
+        byte[] ba = repository.getStorageBytes(contractAddress, DataWord.valueFromHex(hash.toString()));
 
         if (ba==null) {
             return null;
@@ -111,7 +109,7 @@ public class RepositoryBlockStore implements BtcBlockstoreWithCache {
 
     @Override
     public StoredBlock getChainHead() throws BlockStoreException {
-        byte[] ba = repository.getStorageBytes(contractAddress, new DataWord(BLOCK_STORE_CHAIN_HEAD_KEY.getBytes(StandardCharsets.UTF_8)));
+        byte[] ba = repository.getStorageBytes(contractAddress, DataWord.fromString(BLOCK_STORE_CHAIN_HEAD_KEY));
         if (ba==null) {
             return null;
         }
@@ -122,7 +120,7 @@ public class RepositoryBlockStore implements BtcBlockstoreWithCache {
     @Override
     public void setChainHead(StoredBlock chainHead) throws BlockStoreException {
         byte[] ba = storedBlockToByteArray(chainHead);
-        repository.addStorageBytes(contractAddress, new DataWord(BLOCK_STORE_CHAIN_HEAD_KEY.getBytes(StandardCharsets.UTF_8)), ba);
+        repository.addStorageBytes(contractAddress, DataWord.fromString(BLOCK_STORE_CHAIN_HEAD_KEY), ba);
     }
 
     @Override

@@ -19,21 +19,14 @@
 
 package org.ethereum.core.genesis;
 
-import co.rsk.config.TestSystemProperties;
 import co.rsk.core.Coin;
 import co.rsk.core.RskAddress;
-import co.rsk.db.RepositoryImpl;
-import co.rsk.trie.TrieStoreImpl;
-import org.ethereum.config.BlockchainNetConfig;
-import org.ethereum.config.Constants;
+import org.ethereum.core.Genesis;
 import org.ethereum.core.Repository;
-import org.ethereum.datasource.HashMapDB;
-import org.ethereum.db.BlockStore;
-import org.ethereum.listener.EthereumListener;
+import org.ethereum.util.RskTestFactory;
 import org.ethereum.vm.DataWord;
 import org.junit.Assert;
 import org.junit.Test;
-import org.mockito.Mockito;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -42,44 +35,32 @@ public class BlockchainLoaderTest {
 
     @Test
     public void testLoadBlockchainEmptyBlockchain() throws IOException {
-        String jsonFile = "blockchain_loader_genesis.json";
+        RskTestFactory objects = new RskTestFactory() {
+            @Override
+            public Genesis buildGenesis() {
+                return GenesisLoader.loadGenesis("blockchain_loader_genesis.json", BigInteger.ZERO, true, true, true);
+            }
+        };
+        objects.getBlockchain(); // calls loadBlockchain
+        Repository repository = objects.getRepository();
 
-        TestSystemProperties systemProperties = Mockito.mock(TestSystemProperties.class);
+        int genesisAccountKeysSize = 12; // PCCs + test accounts in blockchain_loader_genesis.json
+        Assert.assertEquals(genesisAccountKeysSize, repository.getAccountsKeys().size());
 
-        Constants constants = Mockito.mock(Constants.class);
-        Mockito.when(constants.getInitialNonce()).thenReturn(BigInteger.ZERO);
+        RskAddress daba01 = new RskAddress("dabadabadabadabadabadabadabadabadaba0001");
+        Assert.assertEquals(Coin.valueOf(2000), repository.getBalance(daba01));
+        Assert.assertEquals(BigInteger.valueOf(24), repository.getNonce(daba01));
 
-        BlockchainNetConfig blockchainNetConfig = Mockito.mock(BlockchainNetConfig.class);
-        Mockito.when(blockchainNetConfig.getCommonConstants()).thenReturn(constants);
+        RskAddress daba02 = new RskAddress("dabadabadabadabadabadabadabadabadaba0002");
+        Assert.assertEquals(Coin.valueOf(1000), repository.getBalance(daba02));
+        Assert.assertEquals(BigInteger.ZERO, repository.getNonce(daba02));
 
-        Mockito.when(systemProperties.databaseDir()).thenReturn(new TestSystemProperties().databaseDir());
-        Mockito.when(systemProperties.getBlockchainConfig()).thenReturn(blockchainNetConfig);
-        Mockito.when(systemProperties.genesisInfo()).thenReturn(jsonFile);
-
-        BlockStore blockStore = Mockito.mock(BlockStore.class);
-        Mockito.when(blockStore.getBestBlock()).thenReturn(null);
-
-        EthereumListener ethereumListener = Mockito.mock(EthereumListener.class);
-
-        Repository repository = new RepositoryImpl(systemProperties, new TrieStoreImpl(new HashMapDB().setClearOnClose(false)));;
-
-        BlockChainLoader blockChainLoader = new BlockChainLoader(systemProperties, repository, blockStore, null, null, ethereumListener, null, null);
-
-        blockChainLoader.loadBlockchain();
-
-        Assert.assertEquals(5, repository.getAccountsKeys().size());
-
-        Assert.assertEquals(Coin.valueOf(2000), repository.getBalance(new RskAddress("dabadabadabadabadabadabadabadabadaba0001")));
-        Assert.assertEquals(BigInteger.valueOf(24), repository.getNonce(new RskAddress("dabadabadabadabadabadabadabadabadaba0001")));
-
-        Assert.assertEquals(Coin.valueOf(1000), repository.getBalance(new RskAddress("dabadabadabadabadabadabadabadabadaba0002")));
-        Assert.assertEquals(BigInteger.ZERO, repository.getNonce(new RskAddress("dabadabadabadabadabadabadabadabadaba0002")));
-
-        Assert.assertEquals(Coin.valueOf(10), repository.getBalance(new RskAddress("77045e71a7a2c50903d88e564cd72fab11e82051")));
-        Assert.assertEquals(BigInteger.valueOf(25), repository.getNonce(new RskAddress("77045e71a7a2c50903d88e564cd72fab11e82051")));
-        Assert.assertEquals(DataWord.ONE, repository.getContractDetails(new RskAddress("77045e71a7a2c50903d88e564cd72fab11e82051")).get(DataWord.ZERO));
-        Assert.assertEquals(new DataWord(3), repository.getContractDetails(new RskAddress("77045e71a7a2c50903d88e564cd72fab11e82051")).get(DataWord.ONE));
-        Assert.assertEquals(274, repository.getContractDetails(new RskAddress("77045e71a7a2c50903d88e564cd72fab11e82051")).getCode().length);
+        RskAddress address = new RskAddress("77045e71a7a2c50903d88e564cd72fab11e82051");
+        Assert.assertEquals(Coin.valueOf(10), repository.getBalance(address));
+        Assert.assertEquals(BigInteger.valueOf(25), repository.getNonce(address));
+        Assert.assertEquals(DataWord.ONE, repository.getStorageValue(address, DataWord.ZERO));
+        Assert.assertEquals(DataWord.valueOf(3), repository.getStorageValue(address, DataWord.ONE));
+        Assert.assertEquals(274, repository.getCode(address).length);
 
     }
 

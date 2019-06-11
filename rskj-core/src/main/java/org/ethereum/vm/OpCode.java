@@ -132,6 +132,18 @@ public enum OpCode {
      * (0x1a) Retrieve single byte from word
      */
     BYTE(0x1a, 2, 1, VERY_LOW_TIER),
+    /**
+     * (0x1b) Bitwise SHIFT LEFT operation
+     */
+    SHL(0x1b, 2, 1, VERY_LOW_TIER),
+    /**
+     * (0x1c) Bitwise SHIFT RIGHT operation
+     */
+    SHR(0x1c, 2, 1, VERY_LOW_TIER),
+    /**
+     * (0x1d) Bitwise ARITHMETIC SHIFT RIGHT operation
+     */
+    SAR(0x1d, 2, 1, VERY_LOW_TIER),
 
     /*  Cryptographic Operations    */
 
@@ -623,12 +635,26 @@ public enum OpCode {
      *  also the Value parameter is omitted for this code
      */
     DELEGATECALL(0xf4, 6, 1, SPECIAL_TIER),
+
+    /**
+     * (0xf5) Skinny CREATE2, same as CREATE but with deterministic address
+     */
+    CREATE2(0xf5, 4, 1, SPECIAL_TIER),
+
     /**
      * (0xfc) Halt execution as an invalid opcode
      * setting version==256 assures it's never considered valid.
      * (because scriptVersion range is 0..255)
      */
     HEADER(0xfc, 0, 0, ZERO_TIER,256),
+
+    /**
+     *  opcode that can be used to call another contract (or itself) while disallowing any
+     *  modifications to the state during the call (and its subcalls, if present).
+     *  Any opcode that attempts to perform such a modification (see below for details)
+     *  will result in an exception instead of performing the modification.
+     */
+    STATICCALL(0xfa, 6, 1, SPECIAL_TIER),
     /**
      * (0xfd) The `REVERT` instruction will stop execution, roll back all state changes done so far
      * and provide a pointer to a memory section, which can be interpreted as an error code or message.

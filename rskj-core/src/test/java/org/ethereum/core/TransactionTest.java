@@ -21,9 +21,10 @@ package org.ethereum.core;
 
 import co.rsk.config.TestSystemProperties;
 import co.rsk.core.RskAddress;
+import co.rsk.core.TransactionExecutorFactory;
 import co.rsk.crypto.Keccak256;
-import org.ethereum.config.blockchain.GenesisConfig;
-import org.ethereum.config.net.MainNetConfig;
+import org.bouncycastle.util.BigIntegers;
+import org.bouncycastle.util.encoders.Hex;
 import org.ethereum.core.genesis.GenesisLoader;
 import org.ethereum.crypto.ECKey;
 import org.ethereum.crypto.ECKey.MissingPrivateKeyException;
@@ -38,8 +39,6 @@ import org.ethereum.vm.program.invoke.ProgramInvokeFactoryImpl;
 import org.junit.Assert;
 import org.junit.Ignore;
 import org.junit.Test;
-import org.spongycastle.util.BigIntegers;
-import org.spongycastle.util.encoders.Hex;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -55,6 +54,7 @@ import static org.junit.Assert.assertNull;
 public class TransactionTest {
 
     private TestSystemProperties config = new TestSystemProperties();
+    private final BlockFactory blockFactory = new BlockFactory(config.getActivationConfig());
 
     @Test /* sign transaction  https://tools.ietf.org/html/rfc6979 */
     public void test1() throws NoSuchProviderException, NoSuchAlgorithmException, InvalidKeyException, IOException {
@@ -72,7 +72,7 @@ public class TransactionTest {
         // step 2: hash = sha3(step1)
         byte[] txHash = HashUtil.keccak256(data);
 
-        String signature = key.doSign(txHash).toBase64();
+        ECKey.ECDSASignature signature = key.doSign(txHash);
         System.out.println(signature);
     }
 
@@ -107,7 +107,7 @@ public class TransactionTest {
         System.out.println("RLP encoded tx\t\t: " + Hex.toHexString(tx.getEncoded()));
 
         // retrieve the signer/sender of the transaction
-        ECKey key = ECKey.signatureToKey(tx.getHash().getBytes(), tx.getSignature().toBase64());
+        ECKey key = ECKey.signatureToKey(tx.getHash().getBytes(), tx.getSignature());
 
         System.out.println("Tx unsigned RLP\t\t: " + Hex.toHexString(tx.getEncodedRaw()));
         System.out.println("Tx signed   RLP\t\t: " + Hex.toHexString(tx.getEncoded()));
@@ -148,7 +148,7 @@ public class TransactionTest {
         System.out.println("RLP encoded tx\t\t: " + Hex.toHexString(tx.getEncoded()));
 
         // retrieve the signer/sender of the transaction
-        ECKey key = ECKey.signatureToKey(tx.getHash().getBytes(), tx.getSignature().toBase64());
+        ECKey key = ECKey.signatureToKey(tx.getHash().getBytes(), tx.getSignature());
 
         System.out.println("Tx unsigned RLP\t\t: " + Hex.toHexString(tx.getEncodedRaw()));
         System.out.println("Tx signed   RLP\t\t: " + Hex.toHexString(tx.getEncoded()));
@@ -432,15 +432,21 @@ public class TransactionTest {
                 {
                     Repository track = repository.startTracking();
 
-                    Transaction txConst = CallTransaction.createCallTransaction(config, 0, 0, 100000000000000L,
-                            new RskAddress("095e7baea6a6c7c4c2dfeb977efac326af552d87"), 0, CallTransaction.Function.fromSignature("get"));
+                    Transaction txConst = CallTransaction.createCallTransaction(0, 0, 100000000000000L,
+                            new RskAddress("095e7baea6a6c7c4c2dfeb977efac326af552d87"), 0, CallTransaction.Function.fromSignature("get"), config.getNetworkConstants().getChainId());
                     txConst.sign(new byte[32]);
 
                     Block bestBlock = block;
 
-                    TransactionExecutor executor = new TransactionExecutor
-                            (config, txConst, 0, bestBlock.getCoinbase(), track, new BlockStoreDummy(), null,
-                                    invokeFactory, bestBlock)
+                    TransactionExecutorFactory transactionExecutorFactory = new TransactionExecutorFactory(
+                            config,
+                            new BlockStoreDummy(),
+                            null,
+                            blockFactory,
+                            invokeFactory
+                    );
+                    TransactionExecutor executor = transactionExecutorFactory
+                            .newInstance(txConst, 0, bestBlock.getCoinbase(), track, bestBlock, 0)
                             .setLocalCall(true);
 
                     executor.init();
@@ -456,7 +462,7 @@ public class TransactionTest {
                 // now executing the JSON test transaction
                 return super.executeTransaction(tx);
             }
-        }.runImpl();
+        }.setstateTestUSeREMASC(true).runImpl();
         if (!res.isEmpty()) throw new RuntimeException("Test failed: " + res);
     }
 
@@ -541,13 +547,8 @@ public class TransactionTest {
 
         System.out.println(json.replaceAll("'", "\""));
 
-        try {
-            config.setBlockchainConfig(new GenesisConfig());
-            List<String> res = new StateTestRunner(stateTestSuite.getTestCases().get("test1")).runImpl();
-            if (!res.isEmpty()) throw new RuntimeException("Test failed: " + res);
-        } finally {
-            config.setBlockchainConfig(new MainNetConfig());
-        }
+        List<String> res = new StateTestRunner(stateTestSuite.getTestCases().get("test1")).runImpl();
+        if (!res.isEmpty()) throw new RuntimeException("Test failed: " + res);
     }
 
     @Test
@@ -575,9 +576,10 @@ public class TransactionTest {
 
          */
 
-        BigInteger nonce = config.getBlockchainConfig().getCommonConstants().getInitialNonce();
-        Blockchain blockchain = ImportLightTest.createBlockchain(GenesisLoader.loadGenesis(config, nonce,
-                getClass().getResourceAsStream("/genesis/genesis-light.json"), false));
+        BigInteger nonce = config.getNetworkConstants().getInitialNonce();
+        Blockchain blockchain = ImportLightTest.createBlockchain(GenesisLoader.loadGenesis(nonce,
+                getClass().getResourceAsStream("/genesis/genesis-light.json"), false, true, true),
+                                                                 config);
 
         ECKey sender = ECKey.fromPrivate(Hex.decode("3ec771c31cac8c0dba77a69e503765701d3c2bb62435888d4ffa38fed60c445c"));
         System.out.println("address: " + Hex.toHexString(sender.getAddress()));
@@ -645,9 +647,10 @@ public class TransactionTest {
 
          */
 
-        BigInteger nonce = config.getBlockchainConfig().getCommonConstants().getInitialNonce();
-        Blockchain blockchain = ImportLightTest.createBlockchain(GenesisLoader.loadGenesis(config, nonce,
-                getClass().getResourceAsStream("/genesis/genesis-light.json"), false));
+        BigInteger nonce = config.getNetworkConstants().getInitialNonce();
+        Blockchain blockchain = ImportLightTest.createBlockchain(GenesisLoader.loadGenesis(nonce,
+                getClass().getResourceAsStream("/genesis/genesis-light.json"), false, true, true),
+                                                                 config);
 
         ECKey sender = ECKey.fromPrivate(Hex.decode("3ec771c31cac8c0dba77a69e503765701d3c2bb62435888d4ffa38fed60c445c"));
         System.out.println("address: " + Hex.toHexString(sender.getAddress()));
@@ -695,8 +698,15 @@ public class TransactionTest {
 
     private TransactionExecutor executeTransaction(Blockchain blockchain, Transaction tx) {
         Repository track = blockchain.getRepository().startTracking();
-        TransactionExecutor executor = new TransactionExecutor(config, tx, 0, RskAddress.nullAddress(), blockchain.getRepository(),
-                blockchain.getBlockStore(), null, new ProgramInvokeFactoryImpl(), blockchain.getBestBlock());
+        TransactionExecutorFactory transactionExecutorFactory = new TransactionExecutorFactory(
+                config,
+                blockchain.getBlockStore(),
+                null,
+                blockFactory,
+                new ProgramInvokeFactoryImpl()
+        );
+        TransactionExecutor executor = transactionExecutorFactory
+                .newInstance(tx, 0, RskAddress.nullAddress(), blockchain.getRepository(), blockchain.getBestBlock(), 0);
 
         executor.init();
         executor.execute();

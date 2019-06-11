@@ -22,27 +22,27 @@ import co.rsk.bitcoinj.core.BtcTransaction;
 import co.rsk.bitcoinj.core.NetworkParameters;
 import co.rsk.config.RskMiningConstants;
 import co.rsk.core.Coin;
-import co.rsk.core.bc.TransactionPoolImpl;
 import co.rsk.core.RskAddress;
+import co.rsk.core.bc.PendingState;
 import co.rsk.crypto.Keccak256;
 import co.rsk.remasc.RemascTransaction;
+import org.ethereum.config.blockchain.upgrades.ActivationConfig;
+import org.ethereum.config.blockchain.upgrades.ConsensusRule;
 import org.ethereum.core.TransactionPool;
 import org.ethereum.core.Repository;
 import org.ethereum.core.Transaction;
 import org.ethereum.rpc.TypeConverter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongycastle.util.Arrays;
+import org.bouncycastle.util.Arrays;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.util.*;
+import java.util.function.Function;
 
-/**
- * Created by oscar on 26/09/2016.
- */
 public class MinerUtils {
 
     private static final Logger logger = LoggerFactory.getLogger("minerserver");
@@ -129,20 +129,31 @@ public class MinerUtils {
 
     public static co.rsk.bitcoinj.core.BtcBlock getBitcoinMergedMiningBlock(co.rsk.bitcoinj.core.NetworkParameters params, List<BtcTransaction> transactions) {
         co.rsk.bitcoinj.core.Sha256Hash prevBlockHash = co.rsk.bitcoinj.core.Sha256Hash.ZERO_HASH;
-        long time = System.currentTimeMillis() / 1000;
+        long time = System.currentTimeMillis() / 1000L;
         long difficultyTarget = co.rsk.bitcoinj.core.Utils.encodeCompactBits(params.getMaxTarget());
         return new co.rsk.bitcoinj.core.BtcBlock(params, params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.CURRENT), prevBlockHash, null, time, difficultyTarget, 0, transactions);
     }
 
+    /**
+     * Takes in a proofBuilderFunction (e.g. buildFromTxHashes)
+     * and executes it on the builder corresponding to this block number.
+     */
+    public static byte[] buildMerkleProof(
+            ActivationConfig activationConfig,
+            Function<MerkleProofBuilder, byte[]> proofBuilderFunction,
+            long blockNumber) {
+        if (activationConfig.isActive(ConsensusRule.RSKIP92, blockNumber)) {
+            return proofBuilderFunction.apply(new Rskip92MerkleProofBuilder());
+        } else {
+            return proofBuilderFunction.apply(new GenesisMerkleProofBuilder());
+        }
+    }
+
     public List<org.ethereum.core.Transaction> getAllTransactions(TransactionPool transactionPool) {
-        //TODO: optimize this by considering GasPrice (order by GasPrice/Nonce)
-        TransactionPoolImpl.TransactionSortedSet ret = new TransactionPoolImpl.TransactionSortedSet();
 
-        List<org.ethereum.core.Transaction> pendingTransactions = new LinkedList<>(transactionPool.getPendingTransactions());
+        List<Transaction> txs = transactionPool.getPendingTransactions();
 
-        ret.addAll(pendingTransactions);
-
-        return new LinkedList<>(ret);
+        return PendingState.sortByPriceTakingIntoAccountSenderAndNonce(txs);
     }
 
     public List<org.ethereum.core.Transaction> filterTransactions(List<Transaction> txsToRemove, List<Transaction> txs, Map<RskAddress, BigInteger> accountNonces, Repository originalRepo, Coin minGasPrice) {
