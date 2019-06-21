@@ -55,8 +55,8 @@ import org.slf4j.LoggerFactory;
 import java.math.BigInteger;
 import java.util.*;
 
+import static co.rsk.util.ListArrayUtil.*;
 import static java.lang.String.format;
-import static org.apache.commons.lang3.ArrayUtils.*;
 import static org.ethereum.crypto.HashUtil.EMPTY_TRIE_HASH;
 import static org.ethereum.util.BIUtil.*;
 import static org.ethereum.util.ByteUtil.EMPTY_BYTE_ARRAY;
@@ -586,7 +586,7 @@ public class Program {
                 newBalance, null, track, this.invoke.getBlockStore(), false, byTestingSuite());
 
         returnDataBuffer = null; // reset return buffer right before the call
-        if (isNotEmpty(programCode)) {
+        if (!isEmpty(programCode)) {
             VM vm = new VM(config, precompiledContracts);
             Program program = new Program(config, precompiledContracts, blockFactory, activations, programCode, programInvoke, internalTx, deletedAccountsInBlock);
             vm.play(program);
@@ -769,7 +769,7 @@ public class Program {
 
         boolean callResult;
 
-        if (isNotEmpty(programCode)) {
+        if (!isEmpty(programCode)) {
             callResult = executeCode(msg, contextAddress, contextBalance, internalTx, track, programCode, senderAddress, data);
         }
         else {
@@ -1364,7 +1364,7 @@ public class Program {
                             ByteUtils.clone(EMPTY_TRIE_HASH), ByteUtils.clone(EMPTY_TRIE_HASH),
                             ByteUtils.clone(EMPTY_TRIE_HASH), EMPTY_BYTE_ARRAY, getDifficulty().getData(),
                             getNumber().longValue(), getGasLimit().getData(), 0, getTimestamp().longValue(),
-                            EMPTY_BYTE_ARRAY, Coin.ZERO, null, null, null, null, 0
+                            EMPTY_BYTE_ARRAY, Coin.ZERO, null, null, null, new byte[0], null, 0
                     ),
                     Collections.emptyList(),
                     Collections.emptyList()

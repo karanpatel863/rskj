@@ -29,27 +29,38 @@ import org.ethereum.vm.program.invoke.ProgramInvokeFactory;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class TransactionExecutorFactory {
+
     private final RskSystemProperties config;
     private final BlockStore blockStore;
     private final ReceiptStore receiptStore;
     private final BlockFactory blockFactory;
     private final ProgramInvokeFactory programInvokeFactory;
     private final PrecompiledContracts precompiledContracts;
+    private final ExecutorService vmExecutorService;
 
     public TransactionExecutorFactory(
             RskSystemProperties config,
             BlockStore blockStore,
             ReceiptStore receiptStore,
             BlockFactory blockFactory,
-            ProgramInvokeFactory programInvokeFactory) {
+            ProgramInvokeFactory programInvokeFactory,
+            PrecompiledContracts precompiledContracts) {
         this.config = config;
         this.blockStore = blockStore;
         this.receiptStore = receiptStore;
         this.blockFactory = blockFactory;
         this.programInvokeFactory = programInvokeFactory;
-        this.precompiledContracts = new PrecompiledContracts(config);
+        this.precompiledContracts = precompiledContracts;
+        this.vmExecutorService = Executors.newCachedThreadPool(threadFactory -> new Thread(
+            Thread.currentThread().getThreadGroup(),
+            threadFactory,
+            "vmExecution",
+            config.getVmExecutionStackSize()
+        ));
     }
 
     public TransactionExecutor newInstance(
@@ -101,7 +112,8 @@ public class TransactionExecutorFactory {
                 config.playVM(),
                 config.isRemascEnabled(),
                 precompiledContracts,
-                deletedAccounts
+                deletedAccounts,
+                vmExecutorService
         );
     }
 }

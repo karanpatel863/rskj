@@ -1,6 +1,6 @@
 /*
  * This file is part of RskJ
- * Copyright (C) 2018 RSK Labs Ltd.
+ * Copyright (C) 2019 RSK Labs Ltd.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -15,14 +15,16 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-package co.rsk.peg;
 
-import co.rsk.bitcoinj.core.Sha256Hash;
-import co.rsk.bitcoinj.core.StoredBlock;
-import co.rsk.bitcoinj.store.BlockStoreException;
-import co.rsk.bitcoinj.store.BtcBlockStore;
+package co.rsk.core.bc;
 
-public interface BtcBlockstoreWithCache extends BtcBlockStore {
+import org.ethereum.core.BlockHeader;
 
-    StoredBlock getFromCache(Sha256Hash hash) throws BlockStoreException;
+import java.util.List;
+
+public interface MiningMainchainView {
+
+    void addBest(BlockHeader bestHeader);
+
+    List<BlockHeader> get();
 }

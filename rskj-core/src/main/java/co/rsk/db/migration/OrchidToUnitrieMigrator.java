@@ -48,7 +48,7 @@ import java.util.stream.Collectors;
 import static org.ethereum.crypto.HashUtil.EMPTY_TRIE_HASH;
 
 /**
- * This is a one-time tool and should be removed after SecondFork (TBD) fork activation
+ * This is a one-time tool and should be removed after Wasabi network upgrade activation
  */
 public class OrchidToUnitrieMigrator {
 
@@ -97,6 +97,9 @@ public class OrchidToUnitrieMigrator {
     }
 
     public static void migrateStateToUnitrieIfNeeded(RskContext ctx) throws IOException {
+        if (ctx.getRskSystemProperties().databaseReset()) {
+            return;
+        }
         String databaseDir = ctx.getRskSystemProperties().databaseDir();
         // we need to check these before the data sources are init'ed
         Path unitrieDatabase = Paths.get(databaseDir, "unitrie");

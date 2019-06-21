@@ -20,7 +20,6 @@ package org.ethereum.config.blockchain.upgrades;
 
 public enum ConsensusRule {
     ARE_BRIDGE_TXS_PAID("areBridgeTxsPaid"),
-    DIFFICULTY_DROP_ENABLED("difficultyDropEnabled"), // TODO remove after testnet reset
     RSKIP85("rskip85"),
     RSKIP87("rskip87"),
     RSKIP88("rskip88"),
@@ -33,8 +32,10 @@ public enum ConsensusRule {
     RSKIP98("rskip98"),
     RSKIP103("rskip103"),
     RSKIP106("rskip106"),
+    RSKIP110("rskip110"),
     RSKIP119("rskip119"),
     RSKIP120("rskip120"),
+    RSKIP122("rskip122"),
     RSKIP123("rskip123"),
     RSKIP124("rskip124"),
     RSKIP125("rskip125"),
