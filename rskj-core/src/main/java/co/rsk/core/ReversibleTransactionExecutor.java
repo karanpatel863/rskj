@@ -20,6 +20,7 @@
 package co.rsk.core;
 
 import co.rsk.db.RepositoryLocator;
+import co.rsk.db.RepositorySnapshot;
 import org.ethereum.core.Block;
 import org.ethereum.core.Repository;
 import org.ethereum.core.Transaction;
@@ -50,9 +51,33 @@ public class ReversibleTransactionExecutor {
             byte[] value,
             byte[] data,
             RskAddress fromAddress) {
-        Repository snapshot = repositoryLocator.snapshotAt(executionBlock.getHeader()).startTracking();
+        return executeTransaction_workaround(
+                repositoryLocator.snapshotAt(executionBlock.getHeader()),
+                executionBlock,
+                coinbase,
+                gasPrice,
+                gasLimit,
+                toAddress,
+                value,
+                data,
+                fromAddress
+        );
+    }
 
-        byte[] nonce = snapshot.getNonce(fromAddress).toByteArray();
+    @Deprecated
+    public ProgramResult executeTransaction_workaround(
+            RepositorySnapshot snapshot,
+            Block executionBlock,
+            RskAddress coinbase,
+            byte[] gasPrice,
+            byte[] gasLimit,
+            byte[] toAddress,
+            byte[] value,
+            byte[] data,
+            RskAddress fromAddress) {
+        Repository track = snapshot.startTracking();
+
+        byte[] nonce = track.getNonce(fromAddress).toByteArray();
         UnsignedTransaction tx = new UnsignedTransaction(
                 nonce,
                 gasPrice,
@@ -64,7 +89,7 @@ public class ReversibleTransactionExecutor {
         );
 
         TransactionExecutor executor = transactionExecutorFactory
-                .newInstance(tx, 0, coinbase, snapshot, executionBlock, 0)
+                .newInstance(tx, 0, coinbase, track, executionBlock, 0)
                 .setLocalCall(true);
 
         executor.init();

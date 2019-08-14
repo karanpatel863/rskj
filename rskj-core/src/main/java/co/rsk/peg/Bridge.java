@@ -24,7 +24,6 @@ import co.rsk.config.BridgeConstants;
 import co.rsk.core.RskAddress;
 import co.rsk.panic.PanicProcessor;
 import co.rsk.peg.bitcoin.MerkleBranch;
-import co.rsk.peg.utils.BridgeEventLoggerImpl;
 import co.rsk.peg.utils.BtcTransactionFormatUtils;
 import co.rsk.peg.whitelist.LockWhitelistEntry;
 import co.rsk.peg.whitelist.OneOffWhiteListEntry;
@@ -49,10 +48,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -198,19 +194,17 @@ public class Bridge extends PrecompiledContracts.PrecompiledContract {
 
     private ActivationConfig.ForBlock activations;
     private org.ethereum.core.Transaction rskTx;
-    private org.ethereum.core.Block rskExecutionBlock;
-    private Repository repository;
-    private List<LogInfo> logs;
 
     private BridgeSupport bridgeSupport;
-    private BtcBlockStoreWithCache.Factory btcBlockStoreFactory;
+    private BridgeSupportFactory bridgeSupportFactory;
 
-    public Bridge(RskAddress contractAddress, Constants constants, ActivationConfig activationConfig, BtcBlockStoreWithCache.Factory btcBlockStoreFactory) {
+    public Bridge(RskAddress contractAddress, Constants constants, ActivationConfig activationConfig,
+            BridgeSupportFactory bridgeSupportFactory) {
+        this.bridgeSupportFactory = bridgeSupportFactory;
         this.contractAddress = contractAddress;
         this.constants = constants;
         this.bridgeConstants = constants.getBridgeConstants();
         this.activationConfig = activationConfig;
-        this.btcBlockStoreFactory = btcBlockStoreFactory;
     }
 
     @Override
@@ -287,11 +281,12 @@ public class Bridge extends PrecompiledContracts.PrecompiledContract {
     public void init(Transaction rskTx, Block rskExecutionBlock, Repository repository, BlockStore rskBlockStore, ReceiptStore rskReceiptStore, List<LogInfo> logs) {
         this.activations = activationConfig.forBlock(rskExecutionBlock.getNumber());
         this.rskTx = rskTx;
-        this.rskExecutionBlock = rskExecutionBlock;
-        this.repository = repository;
-        this.logs = logs;
 
-        this.bridgeSupport = setup();
+        this.bridgeSupport = bridgeSupportFactory.newInstance(
+                repository,
+                rskExecutionBlock,
+                contractAddress,
+                logs);
     }
 
     @Override
@@ -350,23 +345,6 @@ public class Bridge extends PrecompiledContracts.PrecompiledContract {
         }
     }
 
-    private BridgeSupport setup() {
-        return new BridgeSupport(
-                bridgeConstants,
-                new BridgeStorageProvider(
-                        repository,
-                        contractAddress,
-                        bridgeConstants,
-                        BridgeStorageConfiguration.fromBlockchainConfig(activations)
-                ),
-                new BridgeEventLoggerImpl(bridgeConstants, logs),
-                repository,
-                rskExecutionBlock,
-                btcBlockStoreFactory,
-                null
-        );
-    }
-
     private void teardown() throws IOException {
         bridgeSupport.save();
     }
@@ -390,10 +368,10 @@ public class Bridge extends PrecompiledContracts.PrecompiledContract {
     public long receiveHeadersGetCost(Object[] args) {
         // Old, private method fixed cost. Only applies before the corresponding RSKIP
         if (!activations.isActive(ConsensusRule.RSKIP124)) {
-            return 22000L;
+            return 22_000L;
         }
 
-        final long BASE_COST = 66_000L;
+        final long BASE_COST = activations.isActive(ConsensusRule.RSKIP132) ? 25_000L : 66_000L;
         if (args == null) {
             return BASE_COST;
         }
@@ -405,7 +383,8 @@ public class Bridge extends PrecompiledContracts.PrecompiledContract {
         }
         // Dynamic cost based on the number of headers
         // We add each additional header times 1650 to the base cost
-        return BASE_COST + (numberOfHeaders - 1) * 1650;
+        final long COST_PER_ADDITIONAL_HEADER = activations.isActive(ConsensusRule.RSKIP132) ? 3_500 : 1_650;
+        return BASE_COST + (numberOfHeaders - 1) * COST_PER_ADDITIONAL_HEADER;
     }
 
     public void receiveHeaders(Object[] args)

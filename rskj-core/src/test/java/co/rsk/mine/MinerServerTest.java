@@ -27,6 +27,7 @@ import co.rsk.core.BlockDifficulty;
 import co.rsk.core.Coin;
 import co.rsk.core.DifficultyCalculator;
 import co.rsk.core.bc.BlockExecutor;
+import co.rsk.core.bc.BlockResult;
 import co.rsk.core.bc.MiningMainchainView;
 import co.rsk.crypto.Keccak256;
 import co.rsk.db.RepositoryLocator;
@@ -86,6 +87,11 @@ public class MinerServerTest extends ParameterizedNetworkUpgradeTest {
             protected Repository buildRepository() {
                 return Mockito.spy(super.buildRepository());
             }
+
+            @Override
+            protected RepositoryLocator buildRepositoryLocator() {
+                return Mockito.spy(super.buildRepositoryLocator());
+            }
         };
         blockchain = factory.getMiningMainchainView();
         repository = factory.getRepository();
@@ -108,13 +114,12 @@ public class MinerServerTest extends ParameterizedNetworkUpgradeTest {
 
         Repository track = mock(Repository.class);
         Mockito.doReturn(repository.getRoot()).when(track).getRoot();
-        Mockito.doReturn(repository.getMutableTrie()).when(track).getMutableTrie();
+        Mockito.doReturn(repository.getTrie()).when(track).getTrie();
         when(track.getNonce(tx1.getSender())).thenReturn(BigInteger.ZERO);
         when(track.getNonce(RemascTransaction.REMASC_ADDRESS)).thenReturn(BigInteger.ZERO);
         when(track.getBalance(tx1.getSender())).thenReturn(Coin.valueOf(4200000L));
         when(track.getBalance(RemascTransaction.REMASC_ADDRESS)).thenReturn(Coin.valueOf(4200000L));
-        Mockito.doReturn(track).when(repository).getSnapshotTo(any());
-        Mockito.doReturn(track).when(repository).startTracking();
+        Mockito.doReturn(track).when(repositoryLocator).startTrackingAt(any());
         Mockito.doReturn(track).when(track).startTracking();
 
         List<Transaction> txs = new ArrayList<>(Collections.singletonList(tx1));
@@ -682,7 +687,11 @@ public class MinerServerTest extends ParameterizedNetworkUpgradeTest {
         when(block2.getDifficulty()).thenReturn(BlockDifficulty.ZERO);
 
         BlockToMineBuilder builder = mock(BlockToMineBuilder.class);
-        when(builder.build(any(), any())).thenReturn(block1).thenReturn(block2);
+        BlockResult blockResult = mock(BlockResult.class);
+        BlockResult blockResult2 = mock(BlockResult.class);
+        when(blockResult.getBlock()).thenReturn(block1);
+        when(blockResult2.getBlock()).thenReturn(block2);
+        when(builder.build(any(), any())).thenReturn(blockResult).thenReturn(blockResult2);
 
         MinerClock clock = new MinerClock(true, Clock.systemUTC());
         MinerServer minerServer = new MinerServerImpl(

@@ -18,9 +18,14 @@
 
 package co.rsk.rpc.modules.eth;
 
+import co.rsk.config.BridgeConstants;
 import co.rsk.core.ReversibleTransactionExecutor;
+import co.rsk.core.bc.BlockResult;
+import co.rsk.db.RepositoryLocator;
+import co.rsk.peg.BridgeSupportFactory;
 import co.rsk.rpc.ExecutionBlockRetriever;
 import org.ethereum.core.Block;
+import org.ethereum.core.Blockchain;
 import org.ethereum.rpc.TypeConverter;
 import org.ethereum.rpc.Web3;
 import org.ethereum.vm.program.ProgramResult;
@@ -34,10 +39,12 @@ public class EthModuleTest {
     @Test
     public void callSmokeTest() {
         Web3.CallArguments args = new Web3.CallArguments();
-        Block executionBlock = mock(Block.class);
+        BlockResult blockResult = mock(BlockResult.class);
+        Block block = mock(Block.class);
         ExecutionBlockRetriever retriever = mock(ExecutionBlockRetriever.class);
-        when(retriever.getExecutionBlock("latest"))
-                .thenReturn(executionBlock);
+        when(retriever.getExecutionBlock_workaround("latest"))
+                .thenReturn(blockResult);
+        when(blockResult.getBlock()).thenReturn(block);
 
         byte[] hreturn = TypeConverter.stringToByteArray("hello");
         ProgramResult executorResult = mock(ProgramResult.class);
@@ -45,12 +52,12 @@ public class EthModuleTest {
                 .thenReturn(hreturn);
 
         ReversibleTransactionExecutor executor = mock(ReversibleTransactionExecutor.class);
-        when(executor.executeTransaction(eq(executionBlock), any(), any(), any(), any(), any(), any(), any()))
+        when(executor.executeTransaction(eq(blockResult.getBlock()), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(executorResult);
 
         EthModule eth = new EthModule(
                 null,
-                null,
+                anyByte(),
                 null,
                 executor,
                 retriever,
@@ -58,9 +65,27 @@ public class EthModuleTest {
                 null,
                 null,
                 null,
-                null);
+                new BridgeSupportFactory(
+                        null, null, null));
 
         String result = eth.call(args, "latest");
         assertThat(result, is(TypeConverter.toJsonHex(hreturn)));
+    }
+
+    @Test
+    public void chainId() {
+        EthModule eth = new EthModule(
+                mock(BridgeConstants.class),
+                (byte) 33,
+                mock(Blockchain.class),
+                mock(ReversibleTransactionExecutor.class),
+                mock(ExecutionBlockRetriever.class),
+                mock(RepositoryLocator.class),
+                mock(EthModuleSolidity.class),
+                mock(EthModuleWallet.class),
+                mock(EthModuleTransaction.class),
+                mock(BridgeSupportFactory.class)
+        );
+        assertThat(eth.chainId(), is("0x21"));
     }
 }

@@ -21,17 +21,19 @@ package co.rsk.rpc.modules.eth;
 import co.rsk.bitcoinj.store.BlockStoreException;
 import co.rsk.config.BridgeConstants;
 import co.rsk.core.ReversibleTransactionExecutor;
+import co.rsk.core.bc.BlockResult;
 import co.rsk.db.RepositoryLocator;
 import co.rsk.peg.BridgeState;
-import co.rsk.peg.BridgeStorageConfiguration;
 import co.rsk.peg.BridgeSupport;
-import co.rsk.peg.BtcBlockStoreWithCache;
+import co.rsk.peg.BridgeSupportFactory;
 import co.rsk.rpc.ExecutionBlockRetriever;
-import org.ethereum.config.blockchain.upgrades.ActivationConfig;
-import org.ethereum.config.blockchain.upgrades.ConsensusRule;
+import co.rsk.trie.TrieStoreImpl;
 import org.ethereum.core.Block;
 import org.ethereum.core.Blockchain;
 import org.ethereum.core.Repository;
+import org.ethereum.datasource.HashMapDB;
+import org.ethereum.db.MutableRepository;
+import org.ethereum.rpc.TypeConverter;
 import org.ethereum.rpc.Web3;
 import org.ethereum.rpc.converters.CallArgumentsToByteArray;
 import org.ethereum.rpc.dto.CompilationResultDTO;
@@ -60,12 +62,12 @@ public class EthModule
     private final EthModuleWallet ethModuleWallet;
     private final EthModuleTransaction ethModuleTransaction;
     private final BridgeConstants bridgeConstants;
-    private final ActivationConfig activationConfig;
-    private final BtcBlockStoreWithCache.Factory btcBlockStoreFactory;
+    private final BridgeSupportFactory bridgeSupportFactory;
+    private final byte chainId;
 
     public EthModule(
             BridgeConstants bridgeConstants,
-            ActivationConfig activationConfig,
+            byte chainId,
             Blockchain blockchain,
             ReversibleTransactionExecutor reversibleTransactionExecutor,
             ExecutionBlockRetriever executionBlockRetriever,
@@ -73,7 +75,8 @@ public class EthModule
             EthModuleSolidity ethModuleSolidity,
             EthModuleWallet ethModuleWallet,
             EthModuleTransaction ethModuleTransaction,
-            BtcBlockStoreWithCache.Factory btcBlockStoreFactory) {
+            BridgeSupportFactory bridgeSupportFactory) {
+        this.chainId = chainId;
         this.blockchain = blockchain;
         this.reversibleTransactionExecutor = reversibleTransactionExecutor;
         this.executionBlockRetriever = executionBlockRetriever;
@@ -82,8 +85,7 @@ public class EthModule
         this.ethModuleWallet = ethModuleWallet;
         this.ethModuleTransaction = ethModuleTransaction;
         this.bridgeConstants = bridgeConstants;
-        this.activationConfig = activationConfig;
-        this.btcBlockStoreFactory = btcBlockStoreFactory;
+        this.bridgeSupportFactory = bridgeSupportFactory;
     }
 
     @Override
@@ -93,16 +95,10 @@ public class EthModule
 
     public Map<String, Object> bridgeState() throws IOException, BlockStoreException {
         Block bestBlock = blockchain.getBestBlock();
-        Repository repository = repositoryLocator.snapshotAt(bestBlock.getHeader()).startTracking();
+        Repository track = repositoryLocator.startTrackingAt(bestBlock.getHeader());
 
-        BridgeSupport bridgeSupport = new BridgeSupport(
-                bridgeConstants,
-                new BridgeStorageConfiguration(
-                        activationConfig.isActive(ConsensusRule.RSKIP87, bestBlock.getNumber()),
-                        activationConfig.isActive(ConsensusRule.RSKIP123, bestBlock.getNumber())
-                ),
-                null, repository, bestBlock, PrecompiledContracts.BRIDGE_ADDR,
-                btcBlockStoreFactory);
+        BridgeSupport bridgeSupport = bridgeSupportFactory.newInstance(
+                track, bestBlock, PrecompiledContracts.BRIDGE_ADDR, null);
 
         byte[] result = bridgeSupport.getStateForDebugging();
 
@@ -114,8 +110,14 @@ public class EthModule
     public String call(Web3.CallArguments args, String bnOrId) {
         String s = null;
         try {
-            Block executionBlock = executionBlockRetriever.getExecutionBlock(bnOrId);
-            ProgramResult res = callConstant(args, executionBlock);
+            BlockResult blockResult = executionBlockRetriever.getExecutionBlock_workaround(bnOrId);
+            ProgramResult res;
+            if (blockResult.getFinalState() != null) {
+                res = callConstant_workaround(args, blockResult);
+            } else {
+                res = callConstant(args, blockResult.getBlock());
+            }
+
             if (res.isRevert()) {
                 throw RskJsonRpcRequestException.transactionRevertedExecutionError();
             }
@@ -156,11 +158,31 @@ public class EthModule
         return ethModuleWallet.sign(addr, data);
     }
 
+    public String chainId() {
+        return TypeConverter.toJsonHex(new byte[] { chainId });
+    }
+
     private ProgramResult callConstant(Web3.CallArguments args, Block executionBlock) {
         CallArgumentsToByteArray hexArgs = new CallArgumentsToByteArray(args);
         return reversibleTransactionExecutor.executeTransaction(
                 executionBlock,
                 executionBlock.getCoinbase(),
+                hexArgs.getGasPrice(),
+                hexArgs.getGasLimit(),
+                hexArgs.getToAddress(),
+                hexArgs.getValue(),
+                hexArgs.getData(),
+                hexArgs.getFromAddress()
+        );
+    }
+
+    @Deprecated
+    private ProgramResult callConstant_workaround(Web3.CallArguments args, BlockResult executionBlock) {
+        CallArgumentsToByteArray hexArgs = new CallArgumentsToByteArray(args);
+        return reversibleTransactionExecutor.executeTransaction_workaround(
+                new MutableRepository(new TrieStoreImpl(new HashMapDB()), executionBlock.getFinalState()),
+                executionBlock.getBlock(),
+                executionBlock.getBlock().getCoinbase(),
                 hexArgs.getGasPrice(),
                 hexArgs.getGasLimit(),
                 hexArgs.getToAddress(),

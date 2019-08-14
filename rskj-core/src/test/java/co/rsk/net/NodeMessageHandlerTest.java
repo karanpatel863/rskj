@@ -70,7 +70,7 @@ public class NodeMessageHandlerTest {
         PeerScoringManager scoring = createPeerScoringManager();
         SimpleBlockProcessor sbp = new SimpleBlockProcessor();
         NodeMessageHandler processor = new NodeMessageHandler(config, sbp, null, null, null, scoring, new ProofOfWorkRule(config).setFallbackMiningEnabled(false));
-        Block block = BlockChainBuilder.ofSize(1, true).getBestBlock();
+        Block block = new BlockChainBuilder().ofSize(1, true).getBestBlock();
         Message message = new BlockMessage(block);
 
         processor.processMessage(sender, message);
@@ -146,7 +146,7 @@ public class NodeMessageHandlerTest {
         SimpleBlockProcessor sbp = new SimpleBlockProcessor();
         NodeMessageHandler processor = new NodeMessageHandler(config, sbp, null, null, null, scoring,
                 new ProofOfWorkRule(config).setFallbackMiningEnabled(false));
-        Block block = BlockChainBuilder.ofSize(1, true).getBestBlock();
+        Block block = new BlockChainBuilder().ofSize(1, true).getBestBlock();
         Message message = new BlockMessage(block);
 
         processor.postMessage(sender, message);
@@ -165,7 +165,7 @@ public class NodeMessageHandlerTest {
         SimpleBlockProcessor sbp = new SimpleBlockProcessor();
         NodeMessageHandler processor = new NodeMessageHandler(config, sbp, null, null, null, null,
                 new ProofOfWorkRule(config).setFallbackMiningEnabled(false));
-        Block block = BlockChainBuilder.ofSize(1, true).getBestBlock();
+        Block block = new BlockChainBuilder().ofSize(1, true).getBestBlock();
         Message message = new BlockMessage(block);
 
         processor.start();
@@ -189,7 +189,7 @@ public class NodeMessageHandlerTest {
         SimpleBlockProcessor sbp = new SimpleBlockProcessor();
         NodeMessageHandler processor = new NodeMessageHandler(config, sbp, null, null, null, scoring,
                 new ProofOfWorkRule(config).setFallbackMiningEnabled(false));
-        Block block = BlockChainBuilder.ofSize(1, true).getBestBlock();
+        Block block = new BlockChainBuilder().ofSize(1, true).getBestBlock();
         byte[] mergedMiningHeader = block.getBitcoinMergedMiningHeader();
         mergedMiningHeader[76] += 3; //change merged mining nonce.
         Message message = new BlockMessage(block);
@@ -635,128 +635,6 @@ public class NodeMessageHandlerTest {
         verify(blockProcessor, never()).processNewBlockHashesMessage(any(), any());
     }
 
-    @Test @Ignore("Block headers message is deprecated must be rewrited or deleted")
-    public void processGetBlockHeadersMessage() throws UnknownHostException {
-        final World world = new World();
-        final Blockchain blockchain = world.getBlockChain();
-        final BlockStore store = new BlockStore();
-
-        final List<Block> blocks = new BlockGenerator().getBlockChain(blockchain.getBestBlock(), 10);
-
-        for (Block b: blocks) {
-            ImportResult result = blockchain.tryToConnect(b);
-            System.out.println(result);
-        }
-
-
-        BlockNodeInformation nodeInformation = new BlockNodeInformation();
-        SyncConfiguration syncConfiguration = SyncConfiguration.IMMEDIATE_FOR_TESTING;
-        BlockSyncService blockSyncService = new BlockSyncService(config, store, blockchain, nodeInformation, syncConfiguration);
-        final NodeBlockProcessor bp = new NodeBlockProcessor(store, blockchain, nodeInformation, blockSyncService, syncConfiguration);
-        final NodeMessageHandler handler = new NodeMessageHandler(config, bp, null, null, null, null,
-                new ProofOfWorkRule(config).setFallbackMiningEnabled(false));
-
-        int baseBlock = 9;
-
-        /*
-            TestCase represents a GetBlockHeaderMessage test case: it receives an input and the expected BlockHeaders.
-            if expected == null, we are not expecting to receive any message.
-        */
-        class TestCase {
-            protected final GetBlockHeadersMessage gbhMessage;
-            protected final List<BlockHeader> expected;
-
-            public TestCase(@Nonnull final GetBlockHeadersMessage gbhMessage, final List<BlockHeader> expected) {
-                this.gbhMessage = gbhMessage;
-                this.expected = expected;
-            }
-        }
-
-        TestCase[] testCases = {
-                new TestCase(
-                        new GetBlockHeadersMessage(blocks.get(baseBlock).getHash().getBytes(), 0),
-                        null
-                ),
-                new TestCase(
-                        new GetBlockHeadersMessage(blocks.get(baseBlock).getHash().getBytes(), 1),
-                        Arrays.asList(
-                                blocks.get(baseBlock).getHeader()
-                        )
-                ),
-                new TestCase(
-                        new GetBlockHeadersMessage(blocks.get(baseBlock).getHash().getBytes(), 5),
-                        Arrays.asList(
-                                blocks.get(baseBlock).getHeader(),
-                                blocks.get(baseBlock - 1).getHeader(),
-                                blocks.get(baseBlock - 2).getHeader(),
-                                blocks.get(baseBlock - 3).getHeader(),
-                                blocks.get(baseBlock - 4).getHeader()
-                        )
-                ),
-                new TestCase(
-                        new GetBlockHeadersMessage(0, blocks.get(baseBlock).getHash().getBytes(), 5, 1, false),
-                        Arrays.asList(
-                                blocks.get(baseBlock).getHeader(),
-                                blocks.get(baseBlock - 2).getHeader(),
-                                blocks.get(baseBlock - 4).getHeader(),
-                                blocks.get(baseBlock - 6).getHeader(),
-                                blocks.get(baseBlock - 8).getHeader()
-                        )
-                ),
-                new TestCase(
-                        new GetBlockHeadersMessage(blocks.get(baseBlock).getNumber(), 1),
-                        Arrays.asList(
-                                blocks.get(baseBlock).getHeader()
-                        )
-                ),
-                new TestCase(
-                        new GetBlockHeadersMessage(blocks.get(baseBlock).getNumber(), null, 5, 1, false),
-                        Arrays.asList(
-                                blocks.get(baseBlock).getHeader(),
-                                blocks.get(baseBlock - 2).getHeader(),
-                                blocks.get(baseBlock - 4).getHeader(),
-                                blocks.get(baseBlock - 6).getHeader(),
-                                blocks.get(baseBlock - 8).getHeader()
-                        )
-                )
-        };
-
-        for (int i = 0; i < testCases.length; i += 1) {
-            final TestCase testCase = testCases[i];
-            final SimpleMessageChannel sender = new SimpleMessageChannel();
-
-            handler.processMessage(sender, testCase.gbhMessage);
-
-            if (testCase.expected == null) {
-                Assert.assertEquals(0, sender.getMessages().size());
-                continue;
-            }
-            Assert.assertEquals(1, sender.getMessages().size());
-        }
-    }
-
-    @Test
-    public void processGetBlockHeaderMessageUsingEmptyStore() throws UnknownHostException {
-        final Block block = new BlockGenerator().getBlock(3);
-
-        final World world = new World();
-        final Blockchain blockchain = world.getBlockChain();
-        final BlockStore store = new BlockStore();
-
-        BlockNodeInformation nodeInformation = new BlockNodeInformation();
-        SyncConfiguration syncConfiguration = SyncConfiguration.IMMEDIATE_FOR_TESTING;
-        BlockSyncService blockSyncService = new BlockSyncService(config, store, blockchain, nodeInformation, syncConfiguration);
-        final NodeBlockProcessor bp = new NodeBlockProcessor(store, blockchain, nodeInformation, blockSyncService, syncConfiguration);
-
-        final NodeMessageHandler handler = new NodeMessageHandler(config, bp, null, null, null, null, new DummyBlockValidationRule());
-
-        final SimpleMessageChannel sender = new SimpleMessageChannel();
-
-        handler.processMessage(sender, new GetBlockHeadersMessage(block.getHash().getBytes(), 1));
-
-        Assert.assertTrue(sender.getMessages().isEmpty());
-    }
-
     @Test
     public void processTransactionsMessage() throws UnknownHostException {
         PeerScoringManager scoring = createPeerScoringManager();
@@ -900,7 +778,7 @@ public class NodeMessageHandlerTest {
         SimpleBlockProcessor sbp = new SimpleBlockProcessor();
         NodeMessageHandler processor = new NodeMessageHandler(config, sbp, null, null, null, null,
                 new ProofOfWorkRule(config).setFallbackMiningEnabled(false));
-        Block block = BlockChainBuilder.ofSize(1, true).getBestBlock();
+        Block block = new BlockChainBuilder().ofSize(1, true).getBestBlock();
         Message message = new BlockRequestMessage(100, block.getHash().getBytes());
 
         processor.processMessage(new SimpleMessageChannel(), message);
